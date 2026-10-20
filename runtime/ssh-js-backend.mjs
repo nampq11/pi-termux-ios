@@ -7,7 +7,7 @@
 // a changed key refuses the connection. Hashed |1| entries are matched too,
 // so files written by ssh-keygen/OpenSSH stay authoritative.
 import crypto from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import SSH2 from 'ssh2';
 import { withDeadline } from './ssh-transport.mjs';
@@ -172,10 +172,8 @@ export const jsSshBackend = {
     return null;
   },
 
-  // The JS keypair generator lands with the pure-JS ed25519/OpenSSH writer;
-  // until then iOS key creation is intentionally unavailable.
-  async generateKey() {
-    throw new Error('JS SSH key generation not implemented yet');
+  async generateKey({ dir, comment }) {
+    return generateKeyPair({ dir, comment });
   },
 
   // ssh2 cannot open OpenSSH streamlocal (unix→unix) channels. iOS attach
@@ -186,3 +184,39 @@ export const jsSshBackend = {
   },
 };
 function withDeadlineJs(operation, options) { return withDeadline(operation, options); }
+
+/** Write an ed25519 keypair in OpenSSH format without shelling out to
+ * ssh-keygen. node:crypto gives the raw seed/public via JWK; the rest is the
+ * openssh-key-v1 wire container, byte-compatible with what ssh-keygen -t
+ * ed25519 writes (unencrypted): 0600 private PEM, 0644 public one-liner. */
+function generateKeyPair({ dir, comment = 'pi-mobile' }) {
+  try {
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const jwk = privateKey.export({ format: 'jwk' }); // d = seed, x = public half
+    const seed = Buffer.from(jwk.d, 'base64url');
+    const pub = Buffer.from(jwk.x, 'base64url');
+    if (seed.length !== 32 || pub.length !== 32) throw new Error('unexpected JWK key material');
+
+    const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
+    const field = (b) => Buffer.concat([u32(b.length), b]);
+    const pubBlob = Buffer.concat([field(Buffer.from('ssh-ed25519')), field(pub)]);
+    const check = crypto.randomBytes(4);
+    // OpenSSH stores the section as: public half (32B), then the private
+    // ed25519_sk blob (64B = seed||public) — verified against ssh-keygen output
+    const sk64 = Buffer.concat([seed, pub]);
+    let section = Buffer.concat([check, check, field(Buffer.from('ssh-ed25519')), field(pub), field(sk64), field(Buffer.from(comment))]);
+    section = Buffer.concat([section, Buffer.from(Array.from({ length: (8 - (section.length % 8)) % 8 }, (_, i) => i + 1))]);
+    const body = Buffer.concat([
+      Buffer.from('openssh-key-v1\0'), field(Buffer.from('none')), field(Buffer.from('none')),
+      field(Buffer.alloc(0)), u32(1), field(pubBlob), field(section),
+    ]);
+    const pem = body.toString('base64').replace(/(.{1,70})/g, '$1\n');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(dir, 'id_ed25519'), `-----BEGIN OPENSSH PRIVATE KEY-----\n${pem}-----END OPENSSH PRIVATE KEY-----\n`, { mode: 0o600 });
+    writeFileSync(path.join(dir, 'id_ed25519.pub'), `ssh-ed25519 ${pubBlob.toString('base64')} ${comment}\n`, { mode: 0o644 });
+    return 0;
+  } catch (e) {
+    console.error('ssh key generation failed:', e?.message || e);
+    return -1;
+  }
+}

@@ -20,7 +20,7 @@ import { RemoteExecutionEnv } from './remote-env.mjs';
 import { parseSshTarget, sshHostFingerprint } from './remote-client.mjs';
 import { createRemoteState } from './remote-state.mjs';
 import { copyAuthTo, probeRemote, remoteBash, runtimeHash, stopRemoteServer } from './remote-provision.mjs';
-import { setSshBackend } from './ssh-transport.mjs';
+import { setSshBackend, sshBackend } from './ssh-transport.mjs';
 import { jsSshBackend } from './ssh-js-backend.mjs';
 import {
   acquireOwnerLock, agentOf, createCredentialStore, createModelCatalog, ensureModel, isBusy,
@@ -507,14 +507,9 @@ async function handleApi(req, res, url, p) {
   if (p === '/api/sshkey' && req.method === 'GET') return json(res, 200, sshKeyInfo());
   if (p === '/api/sshkey' && req.method === 'POST') {
     if (sshKeyInfo().exists) return json(res, 200, { ok: true, ...sshKeyInfo() });
-    const prefix = process.env.PREFIX || '';
     const sshDir = `${HOME_DIR}/.ssh`;
     await mkdir(sshDir, { recursive: true, mode: 0o700 });
-    const r = await new Promise((resolve) => {
-      const kg = spawn(`${prefix}/bin/ssh-keygen`, ['-t', 'ed25519', '-N', '', '-f', `${sshDir}/id_ed25519`, '-C', 'pi-mobile'], { env: process.env });
-      kg.on('exit', (c) => resolve(c));
-      kg.on('error', () => resolve(-1));
-    });
+    const r = await sshBackend().generateKey({ dir: sshDir, comment: 'pi-mobile' });
     return json(res, r === 0 ? 200 : 500, { ok: r === 0, ...sshKeyInfo() });
   }
 
