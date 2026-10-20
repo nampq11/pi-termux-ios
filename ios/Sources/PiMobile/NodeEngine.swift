@@ -14,6 +14,29 @@ enum NodeEngine {
 
     private static let log = Logger(subsystem: "org.pimobile.app", category: "engine")
 
+    private static func redirectOutput() {
+        var p = [Int32](repeating: 0, count: 2)
+        guard pipe(&p) == 0 else { return }
+        dup2(p[1], STDOUT_FILENO)
+        dup2(p[1], STDERR_FILENO)
+        close(p[1])
+        let readFd = p[0]
+        let t = Thread {
+            let handle = FileHandle(fileDescriptor: readFd)
+            while true {
+                let data = handle.availableData
+                guard !data.isEmpty else { break }
+                if let str = String(data: data, encoding: .utf8) {
+                    for line in str.split(separator: "\n") {
+                        log.info("[Node] \(String(line), privacy: .public)")
+                    }
+                }
+            }
+        }
+        t.name = "pi-node-stdout"
+        t.start()
+    }
+
     /// Launches the engine on its own thread. `node_start` blocks that thread
     /// for the lifetime of the script's event loop (i.e. forever for the
     /// bridge server) and returns only if Node exits.
@@ -23,6 +46,7 @@ enum NodeEngine {
     ///   - environment: environment variables applied via `setenv` before the
     ///     engine starts (HOME, PI_WORKDIR, … — mirrors PiService.startNode).
     static func launch(script: String, environment: [String: String]) {
+        redirectOutput()
         log.info("engine: launching node for \(script, privacy: .public)")
         environment.forEach { setenv($0.key, $0.value, 1) }
         let thread = Thread {

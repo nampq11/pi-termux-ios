@@ -162,8 +162,13 @@ public final class AppModel {
                     let changeType = change["type"] as? String
                     if changeType == "text_delta", let delta = change["delta"] as? String {
                         agent.state.items[idx].text += delta
+                    } else if changeType == "thinking_delta", let delta = change["delta"] as? String {
+                        agent.state.items[idx].thinking = (agent.state.items[idx].thinking ?? "") + delta
                     } else if changeType == "message", let msg = change["message"] as? [String: Any] {
                         agent.state.items[idx].text = extractText(from: msg["content"])
+                        if let th = extractThinking(from: msg["content"]) {
+                            agent.state.items[idx].thinking = th
+                        }
                     }
                 }
             }
@@ -183,9 +188,12 @@ public final class AppModel {
                let status = rec["status"] as? String,
                status == "unanswered" {
                 let reason = rec["reason"] as? String ?? "unknown"
+                let detail = rec["detail"] as? String ?? ""
                 agent.state.busy = false
                 if reason == "no_model" {
                     agent.state.error = "No model is configured. Please select a model or add an API key under Accounts."
+                } else if !detail.isEmpty {
+                    agent.state.error = detail
                 } else {
                     agent.state.error = "Request unanswered: \(reason)"
                 }
@@ -307,6 +315,7 @@ public final class AppModel {
 
             case "assistant":
                 let text = extractText(from: m["content"])
+                let thinking = extractThinking(from: m["content"])
                 let stopReason = m["stopReason"] as? String
                 let errMsg = m["errorMessage"] as? String
 
@@ -315,6 +324,7 @@ public final class AppModel {
                         id: id,
                         kind: "assistant",
                         text: text,
+                        thinking: thinking,
                         streaming: false,
                         status: stopReason == "error" ? "error" : "done",
                         output: errMsg
@@ -600,6 +610,14 @@ public final class AppModel {
                 .joined(separator: "\n")
         }
         return ""
+    }
+
+    private func extractThinking(from content: Any?) -> String? {
+        guard let arr = content as? [[String: Any]] else { return nil }
+        let thinking = arr.filter { ($0["type"] as? String) == "thinking" }
+            .compactMap { $0["thinking"] as? String }
+            .joined(separator: "\n")
+        return thinking.isEmpty ? nil : thinking
     }
 
     private func stringify(_ value: Any?) -> String {

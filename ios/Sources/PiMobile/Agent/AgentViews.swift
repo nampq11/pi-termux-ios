@@ -254,7 +254,14 @@ public struct AgentItemView: View {
                 } else if item.streaming == true {
                     ProgressView().controlSize(.small)
                 }
+                if let output = item.output, !output.isEmpty {
+                    Label(output, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(item.status == "error" ? .red : .secondary)
+                }
             }
+            .padding(.trailing, 40)
+            .frame(maxWidth: .infinity, alignment: .leading)
         case "tool":
             toolView
         case "context":
