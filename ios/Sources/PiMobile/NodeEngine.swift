@@ -1,5 +1,6 @@
 import Foundation
 import NodeMobile
+import os
 
 /// Starts the embedded Node.js engine for the HTTP/SSE/WS bridge.
 ///
@@ -11,6 +12,8 @@ import NodeMobile
 /// app relaunch.
 enum NodeEngine {
 
+    private static let log = Logger(subsystem: "org.pimobile.app", category: "engine")
+
     /// Launches the engine on its own thread. `node_start` blocks that thread
     /// for the lifetime of the script's event loop (i.e. forever for the
     /// bridge server) and returns only if Node exits.
@@ -20,6 +23,7 @@ enum NodeEngine {
     ///   - environment: environment variables applied via `setenv` before the
     ///     engine starts (HOME, PI_WORKDIR, … — mirrors PiService.startNode).
     static func launch(script: String, environment: [String: String]) {
+        log.info("engine: launching node for \(script, privacy: .public)")
         environment.forEach { setenv($0.key, $0.value, 1) }
         let thread = Thread {
             let arguments = ["node", script]
@@ -38,6 +42,7 @@ enum NodeEngine {
             argv.append(nil)
             // V8 needs far more than the default thread stack (docs: >= 2 MB).
             _ = node_start(Int32(arguments.count), &argv)
+            log.error("engine: node_start returned (engine exited)")
         }
         thread.stackSize = 8 << 20
         thread.name = "pi-node-engine"

@@ -1,14 +1,21 @@
+import os
 import SwiftUI
 
 @main
 struct PiMobileApp: App {
     @StateObject private var controller = RuntimeController()
+    @Environment(\.scenePhase) private var scenePhase
+
+    private static let log = Logger(subsystem: "org.pimobile.app", category: "app")
 
     var body: some Scene {
         WindowGroup {
             BridgeScreen()
                 .environmentObject(controller)
                 .preferredColorScheme(.dark)
+        }
+        .onChange(of: scenePhase) { phase in
+            Self.log.info("scenePhase -> \(String(describing: phase), privacy: .public)")
         }
     }
 }

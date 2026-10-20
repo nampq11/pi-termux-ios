@@ -22,7 +22,8 @@ PLIST_HEAD = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
 
 def mux_message(fields):
     payload = (PLIST_HEAD + fields + '</dict></plist>').encode()
-    header = struct.pack('>IIII', 16 + len(payload), 1, 8, 1)  # len, ver, Plist, tag
+    # usbmuxd's header is little-endian: len | version 1 | Plist | tag
+    header = struct.pack('<IIII', 16 + len(payload), 1, 8, 1)
     return header + payload
 
 
@@ -33,7 +34,7 @@ def read_reply(sock):
         if not chunk:
             raise ConnectionError('usbmuxd closed during header')
         header += chunk
-    length = struct.unpack('>I', header[:4])[0] - 16
+    length = struct.unpack('<I', header[:4])[0] - 16
     payload = b''
     while len(payload) < length:
         chunk = sock.recv(length - len(payload))
@@ -44,22 +45,24 @@ def read_reply(sock):
 
 
 def first_device_id(sock, udid=None):
-    """DeviceID of the first attached device (optionally matching udid)."""
+    """DeviceID of the attached device (optionally matching udid), via the
+    one-shot ListDevices query that libusbmuxd also uses."""
     sock.sendall(mux_message(
-        '<key>MessageType</key><string>Listen</string>'
+        '<key>MessageType</key><string>ListDevices</string>'
         '<key>ClientVersionString</key><string>pi-mux-forward</string>'
-        '<key>ProgName</key><string>pi-mux-forward</string>'))
-    while True:
-        reply = read_reply(sock)
-        if '<string>Attached</string>' not in reply:
+        '<key>ProgName</key><string>pi-mux-forward</string>'
+        '<key>kLibUSBMuxVersion</key><integer>3</integer>'))
+    reply = read_reply(sock)
+    # DeviceList is an array of dicts: DeviceID + Properties{SerialNumber...};
+    # a device dict matches when it carries the udid (or none was given)
+    devices = reply.split('<string>Attached</string>')
+    for device in devices[1:]:
+        if udid and udid not in device:
             continue
-        if udid and udid not in reply:
-            continue
-        for part in reply.split('<dict>'):
-            if (udid or 'SerialNumber') in part and '<string>Attached' not in part:
-                for tag in part.split('<key>')[1:]:
-                    if tag.startswith('DeviceID</key>'):
-                        return int(tag.split('<integer>')[1].split('</integer>')[0])
+        for tag in device.split('<key>')[1:]:
+            if tag.startswith('DeviceID</key>'):
+                return int(tag.split('<integer>')[1].split('</integer>')[0])
+    sys.exit(f'no matching device in usbmuxd device list: {reply[:200]}')
 
 
 def tunnel_to(device_id, port):

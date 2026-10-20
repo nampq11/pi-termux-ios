@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Installs the bundled JS runtime payload from the app bundle into the app's
 /// Application Support directory.
@@ -14,6 +15,8 @@ import Foundation
 /// touched by reinstalls; runtime/ is replaced as a whole so files removed
 /// from a newer bundle do not linger.
 enum RuntimeInstaller {
+
+    private static let log = Logger(subsystem: "org.pimobile.app", category: "installer")
 
     /// Bump when the installer logic itself changes (not on every payload).
     static let runtimeVersion = 1
@@ -39,8 +42,10 @@ enum RuntimeInstaller {
 
     static func isInstalled(fingerprint: String) -> Bool {
         let stamp = rootDirectory().appendingPathComponent(".runtime-version")
-        return (try? String(contentsOf: stamp, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-            == fingerprint
+        let current = (try? String(contentsOf: stamp, encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        log.info("isInstalled: stamp=\(current ?? "nil", privacy: .public) want=\(fingerprint, privacy: .public)")
+        return current == fingerprint
     }
 
     /// Installs (or reinstalls) the runtime. Cheap no-op when the stamp matches.
@@ -48,9 +53,12 @@ enum RuntimeInstaller {
         let payloadZip = try bundled("runtime", "zip")
         let fingerprint = try Self.fingerprint
         if isInstalled(fingerprint: fingerprint) {
+            log.info("stamp matches; runtime already installed")
             try ensureDirectories()
             return
         }
+
+        log.info("extracting runtime payload (replaces the whole runtime/ tree)")
 
         let root = rootDirectory()
         let fm = FileManager.default
@@ -63,8 +71,10 @@ enum RuntimeInstaller {
         do {
             try RuntimeArchive.extract(archiveURL: payloadZip, into: root)
         } catch {
+            log.error("extraction failed: \(error.localizedDescription, privacy: .public)")
             throw InstallerError.extractionFailed(error.localizedDescription)
         }
+        log.info("extraction done")
         guard fm.fileExists(atPath: root.appendingPathComponent("runtime/server.mjs").path) else {
             throw InstallerError.extractionFailed("server.mjs missing after extraction")
         }
@@ -76,6 +86,7 @@ enum RuntimeInstaller {
         // already exist, so it could never write a first-install stamp.
         let stamp = root.appendingPathComponent(".runtime-version")
         try fingerprint.data(using: .utf8)?.write(to: stamp, options: .atomic)
+        log.info("stamp written; runtime ready")
     }
 
     static func ensureDirectories() throws {

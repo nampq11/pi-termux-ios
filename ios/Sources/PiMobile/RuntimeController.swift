@@ -1,5 +1,5 @@
 import Foundation
-import Observation
+import os
 
 /// Drives the boot sequence and publishes bridge state to the UI:
 /// install payload → start Node engine → wait for the port/token handshake →
@@ -11,6 +11,8 @@ import Observation
 /// (the engine cannot be restarted, and process.exit would kill the app).
 @MainActor
 final class RuntimeController: ObservableObject {
+
+    private static let log = Logger(subsystem: "org.pimobile.app", category: "controller")
 
     enum Phase: Equatable {
         case preparing
@@ -56,6 +58,7 @@ final class RuntimeController: ObservableObject {
         do {
             try RuntimeInstaller.installIfNeeded()
         } catch {
+            Self.log.error("boot: install failed: \(error.localizedDescription, privacy: .public)")
             phase = .failed("runtime install failed: \(error.localizedDescription)")
             return
         }
@@ -65,6 +68,7 @@ final class RuntimeController: ObservableObject {
         try? FileManager.default.removeItem(at: stateDir.appendingPathComponent("fatal"))
 
         phase = .starting
+        Self.log.info("boot: starting node engine")
         NodeEngine.launch(
             script: root.appendingPathComponent("runtime/server.mjs").path,
             environment: environment())
@@ -74,6 +78,7 @@ final class RuntimeController: ObservableObject {
         }
         if !ready {
             if case .failed = phase {} else {
+                Self.log.error("boot: bridge never came up")
                 phase = .failed("runtime failed to start — relaunch the app")
             }
         }
@@ -102,6 +107,7 @@ final class RuntimeController: ObservableObject {
         for _ in 0..<(maxSeconds * 2) {
             if let fatal = try? String(contentsOf: fatalFile, encoding: .utf8), !fatal.isEmpty {
                 let message = fatal.trimmingCharacters(in: .whitespacesAndNewlines)
+                Self.log.error("bridge: fatal boot file: \(message, privacy: .public)")
                 Task { @MainActor in self.phase = .failed("runtime error: \(message)") }
                 return false
             }
@@ -116,6 +122,7 @@ final class RuntimeController: ObservableObject {
                 components.queryItems = [URLQueryItem(name: "token", value: token)]
                 if let url = components.url {
                     reloadAttempts = 0
+                    Self.log.info("bridge: handshake complete on port \(port, privacy: .public)")
                     onReady(url)
                     return true
                 }
