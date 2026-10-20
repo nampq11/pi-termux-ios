@@ -70,11 +70,12 @@ enum RuntimeInstaller {
         }
         try ensureDirectories()
 
-        // stamp last, atomically (write + rename), like the Android installer
+        // stamp last. Atomic write = write-to-temp + rename(2), which replaces
+        // an old stamp or creates a fresh one, matching Android's renameTo.
+        // replaceItemAt is not usable here: it requires the destination to
+        // already exist, so it could never write a first-install stamp.
         let stamp = root.appendingPathComponent(".runtime-version")
-        let tmpStamp = root.appendingPathComponent(".runtime-version.tmp")
-        try fingerprint.data(using: .utf8)?.write(to: tmpStamp, options: .atomic)
-        try fm.replaceItemAt(tmpStamp, withItemAt: stamp)
+        try fingerprint.data(using: .utf8)?.write(to: stamp, options: .atomic)
     }
 
     static func ensureDirectories() throws {
