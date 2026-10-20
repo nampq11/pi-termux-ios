@@ -23,6 +23,7 @@ struct PiMobileApp: App {
 struct BridgeScreen: View {
     @EnvironmentObject private var controller: RuntimeController
     @State private var uiHost = UIHost()
+    @State private var appModel = AppModel()
 
     var body: some View {
         ZStack {
@@ -32,9 +33,10 @@ struct BridgeScreen: View {
             case .preparing, .starting:
                 WaitingView(phase: controller.phase)
             case .ready(let url):
-                BridgeWebView(url: url, uiHost: uiHost) {
-                    controller.bridgeLoadFailed()
-                }
+                AgentView()
+                    .environment(appModel)
+                    .onAppear { appModel.connect(url: url) }
+                    .onChange(of: url) { _, newUrl in appModel.connect(url: newUrl) }
             case .failed(let message):
                 FailureView(message: message)
             }
