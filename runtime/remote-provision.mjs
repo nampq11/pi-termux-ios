@@ -116,13 +116,15 @@ export async function stopRemoteServer({ ssh, prefix = '', log = () => {} }) {
   await sshRun(ctx, `tmux kill-session -t ${TMUX_SESSION} 2>/dev/null; true`);
   return true;
 }
-// Pure-JS backends (iOS) attach over pi-serverd's loopback TCP listener —
-// request it (0 = OS-assigned port, published in server.tcp). Spawn backends
-// keep streamlocal forwarding and don't touch this.
-const SERVERD_TCP_ENV = sshBackend().name === 'js' ? 'export PI_SERVERD_TCP_PORT=0; ' : '';
-const RUN_CMD = `${PRELUDE}cd "$HOME/${REMOTE_DIR}" && ${SERVERD_TCP_ENV}exec node pi-serverd.mjs`;
-const START_TMUX = `tmux has-session -t ${TMUX_SESSION} 2>/dev/null && exit 1; tmux new-session -d -s ${TMUX_SESSION} ${shq(`exec bash -l -c ${shq(RUN_CMD)}`)}`;
-const START_NOHUP = `cd "$HOME/${REMOTE_DIR}" || exit 1; if command -v setsid >/dev/null 2>&1; then L=setsid; else L=""; fi; nohup $L bash -l -c ${shq(RUN_CMD)} >> "$HOME/${REMOTE_DIR}/serverd.log" 2>&1 < /dev/null &`;
+const serverdRunCmd = () => {
+  // Pure-JS backends (iOS) attach over pi-serverd's loopback TCP listener —
+  // request it (0 = OS-assigned port, published in server.tcp). Spawn backends
+  // keep streamlocal forwarding and don't touch this.
+  const tcpEnv = sshBackend().name === 'js' ? 'export PI_SERVERD_TCP_PORT=0; ' : '';
+  return `${PRELUDE}cd "$HOME/${REMOTE_DIR}" && ${tcpEnv}exec node pi-serverd.mjs`;
+};
+const startTmuxCmd = () => `tmux has-session -t ${TMUX_SESSION} 2>/dev/null && exit 1; tmux new-session -d -s ${TMUX_SESSION} ${shq(`exec bash -l -c ${shq(serverdRunCmd())}`)}`;
+const startNohupCmd = () => `cd "$HOME/${REMOTE_DIR}" || exit 1; if command -v setsid >/dev/null 2>&1; then L=setsid; else L=""; fi; nohup $L bash -l -c ${shq(serverdRunCmd())} >> "$HOME/${REMOTE_DIR}/serverd.log" 2>&1 < /dev/null &`;
 /** Recover a promoted release OR the gap between renames. Inspect remote
  * markers instead of relying on a local 'swapped' flag after a lost response.
  */
@@ -225,7 +227,7 @@ export async function ensureRemoteServer({ ssh, prefix = '', log = () => {}, cop
       const r = await run(`rm -rf "${base}/runtime.prev" && { [ ! -e "${base}/runtime" ] || mv "${base}/runtime" "${base}/runtime.prev"; } && mv "${stage}" "${base}/runtime"`);
       if (r.code !== 0) throw new Error(`release swap failed: ${r.err}`);
     }
-    const start = await run(tmux ? START_TMUX : START_NOHUP);
+    const start = await run(tmux ? startTmuxCmd() : startNohupCmd());
     if (start.code !== 0) throw new Error(`daemon start failed: ${start.err || start.out}`);
     // Check for a live process AND a socket, not just a stale socket pathname.
     for (let i = 0; i < 40; i++) {
@@ -246,7 +248,7 @@ export async function ensureRemoteServer({ ssh, prefix = '', log = () => {}, cop
         log(`deployment failed (${e.message}); rolling back…`);
         const r = await run(`${rollbackReleaseScript(base, want)}
           if [ -d "${base}/runtime" ]; then
-            ${START_NOHUP}
+            ${startNohupCmd()}
           fi`, { signal: undefined });
         if (r.code !== 0) throw new Error(r.err || 'release restore failed');
       }

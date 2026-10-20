@@ -231,3 +231,17 @@ test('spawn-shaped backends keep streamlocal even when server.tcp exists', async
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('remote-provision can be imported under PI_PLATFORM=ios before a backend is registered', async () => {
+  const prevPlatform = process.env.PI_PLATFORM;
+  process.env.PI_PLATFORM = 'ios';
+  setSshBackend(null);
+  try {
+    // Dynamically importing with a cache-busting query simulates cold module evaluation.
+    const mod = await import(`./remote-provision.mjs?test=${Date.now()}`);
+    assert.ok(typeof mod.ensureRemoteServer === 'function');
+  } finally {
+    if (prevPlatform === undefined) delete process.env.PI_PLATFORM;
+    else process.env.PI_PLATFORM = prevPlatform;
+  }
+});
