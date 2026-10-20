@@ -91,7 +91,7 @@ enum RuntimeInstaller {
 
     static func ensureDirectories() throws {
         let root = rootDirectory()
-        for name in ["home", "work", "tmp", "home/.pi-mobile"] {
+        for name in ["home", "work", "tmp", "home/.pi-mobile", "home/.pi", "home/.pi/agent"] {
             try FileManager.default.createDirectory(
                 at: root.appendingPathComponent(name, isDirectory: true),
                 withIntermediateDirectories: true)

@@ -647,7 +647,8 @@ async function handleApi(req, res, url, p) {
       return json(res, 200, { ok: true });
     }
     if (!body.key) return json(res, 400, { error: 'key required' });
-    await credentialStore.modify(provider, async () => ({ type: 'api_key', key: String(body.key) }));
+    const key = String(body.key).trim();
+    await credentialStore.modify(provider, async () => ({ type: 'api_key', key }));
     try { await models.refresh(); } catch {}
     await giveActiveSessionAModel();
     return json(res, 200, { ok: true });

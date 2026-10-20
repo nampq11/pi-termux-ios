@@ -510,10 +510,12 @@ public final class AppModel {
             placeholder: "sk-..."
         )
         agentHost.beginLogin(provider, prompt: prompt) { [weak self] answer in
-            guard let self, let answer, !answer.isEmpty else { return }
+            guard let self, let answer else { return }
+            let cleanKey = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanKey.isEmpty else { return }
             Task {
                 do {
-                    _ = try await self.post("/api/auth", body: ["provider": provider, "key": answer]) as [String: Any]
+                    _ = try await self.post("/api/auth", body: ["provider": provider, "key": cleanKey]) as [String: Any]
                     await self.loadAgentAccounts()
                     await self.loadAgentModels()
                     if let first = self.agentModels.first(where: { $0.provider == provider }) ?? self.agentModels.first {
