@@ -20,6 +20,8 @@ import { RemoteExecutionEnv } from './remote-env.mjs';
 import { parseSshTarget, sshHostFingerprint } from './remote-client.mjs';
 import { createRemoteState } from './remote-state.mjs';
 import { copyAuthTo, probeRemote, remoteBash, runtimeHash, stopRemoteServer } from './remote-provision.mjs';
+import { setSshBackend } from './ssh-transport.mjs';
+import { jsSshBackend } from './ssh-js-backend.mjs';
 import {
   acquireOwnerLock, agentOf, createCredentialStore, createModelCatalog, ensureModel, isBusy,
   openHarness, pickModel, readJson, requestIdOf, sessionStore, Subagent, whenBusyOf,
@@ -37,6 +39,9 @@ const STATE_DIR = path.join(HOME_DIR, '.pi-mobile');
 // cannot restart, and process.exit would kill the whole app). Fatal boot
 // errors are reported through this file; the Swift shell polls it.
 const IOS = process.env.PI_PLATFORM === 'ios';
+// iOS denies exec(): reach SSH hosts through the pure-JS client instead of
+// the OpenSSH binary every other platform uses.
+if (IOS) setSshBackend(jsSshBackend);
 const FATAL_FILE = path.join(STATE_DIR, 'fatal');
 if (IOS) {
   // last-resort guard before anything else runs: an uncaught exception during

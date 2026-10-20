@@ -1,0 +1,188 @@
+// Pure-JS SSH backend for iOS, where exec() is denied. Same contract as
+// spawnSshBackend (see ssh-transport.mjs); registered via setSshBackend()
+// when PI_PLATFORM=ios.
+//
+// Host-key trust mirrors `StrictHostKeyChecking=accept-new`: a first connect
+// stores the key in known_hosts (plain entry, or [host]:port for non-22);
+// a changed key refuses the connection. Hashed |1| entries are matched too,
+// so files written by ssh-keygen/OpenSSH stay authoritative.
+import crypto from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import SSH2 from 'ssh2';
+import { withDeadline } from './ssh-transport.mjs';
+
+const { Client } = SSH2;
+
+/** Host keys arrive as SSH wire blobs: u32 length + algorithm name + key data.
+ * This is byte-for-byte what known_hosts stores, so the algorithm name reads
+ * straight off the front of the buffer. */
+function hostKeyType(keyBuffer) {
+  const algLen = keyBuffer.readUInt32BE(0);
+  return keyBuffer.toString('utf8', 4, 4 + algLen);
+}
+
+/** `host` or `[host]:port` — the known_hosts pattern for this target. */
+function knownHostsPattern(host, port) {
+  const bare = host.replace(/^.*@/, '');
+  return port && port !== 22 ? `[${bare}]:${port}` : bare;
+}
+
+function sha256Fingerprint(keyBuffer) {
+  return `SHA256:${crypto.createHash('sha256').update(keyBuffer).digest('base64').replace(/=+$/, '')}`;
+}
+
+/** Match one known_hosts host-field against the target (plain + hashed |1|). */
+function fieldMatches(field, pattern) {
+  return field.split(',').some((entry) => {
+    if (entry === pattern) return true;
+    if (entry.startsWith('|1|')) {
+      const [, , salt, hash] = entry.split('|');
+      const mac = crypto.createHmac('sha1', Buffer.from(salt, 'base64')).update(pattern).digest('base64');
+      return mac === hash;
+    }
+    return false;
+  });
+}
+
+function readKnownHosts(home) {
+  const file = path.join(home, '.ssh', 'known_hosts');
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8').split('\n')
+    .filter((l) => l.trim() && !l.startsWith('#') && !l.startsWith('@'))
+    .map((l) => l.trim().split(/\s+/))
+    .filter((f) => f.length >= 3);
+}
+
+function storeHostKey(home, pattern, keyType, keyBuffer) {
+  const dir = path.join(home, '.ssh');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  appendFileSync(path.join(dir, 'known_hosts'), `${pattern} ${keyType} ${keyBuffer.toString('base64')}\n`, { mode: 0o600 });
+}
+
+function parseTarget(host) {
+  const at = host.indexOf('@');
+  const user = at >= 0 ? host.slice(0, at) : (process.env.USER || process.env.LOGNAME);
+  if (!user) throw new Error('SSH target must include user@ — cannot infer a username on iOS');
+  return { username: user, hostname: at >= 0 ? host.slice(at + 1) : host };
+}
+
+function connect({ host, port, home, signal }) {
+  const { username, hostname } = parseTarget(host);
+  const keyPath = path.join(home, '.ssh', 'id_ed25519');
+  const privateKey = readFileSync(keyPath, 'utf8');
+  const pattern = knownHostsPattern(host, port);
+  return new Promise((resolve, reject) => {
+    const conn = new Client();
+    const fail = (e) => { try { conn.end(); } catch {} reject(e); };
+    conn.on('error', fail);
+    conn.on('ready', () => { conn.removeListener('error', fail); resolve(conn); });
+    conn.connect({
+      host: hostname,
+      port: port || 22,
+      username,
+      privateKey,
+      keepalive: { interval: 15, countMax: 3 },
+      readyTimeout: 15_000,
+      // accept-new: unknown host → store and accept; known-but-different → refuse
+      hostVerifier: (keyBuffer, verify) => {
+        try {
+          const keyType = hostKeyType(keyBuffer);
+          const stored = readKnownHosts(home).find((f) => fieldMatches(f[0], pattern) && f[1] === keyType);
+          if (stored) return verify(stored[2] === keyBuffer.toString('base64'));
+          storeHostKey(home, pattern, keyType, keyBuffer);
+          verify(true);
+        } catch (e) { verify(false); }
+      },
+    });
+    if (signal) signal.addEventListener('abort', () => fail(signal.reason), { once: true });
+  });
+}
+
+export const jsSshBackend = {
+  name: 'js',
+
+  /** Same process semantics as the spawn backend: bounded, tail-trimmed
+   * output, line callbacks, and stdin write failures must not crash the
+   * caller with an unhandled event. */
+  run({ home, host, port, command, stdin, onLine, timeoutMs = 60_000, signal }) {
+    return withDeadline((bounded) => new Promise((resolve, reject) => {
+      let conn;
+      let out = '', err = '', done = false, exitCode = null;
+      const tail = (v, d) => (v + d).slice(-32_768); // don't keep unlimited npm output
+      let lineBuffer = '';
+      const emit = (v) => {
+        lineBuffer += String(v);
+        let i;
+        while ((i = lineBuffer.indexOf('\n')) >= 0) {
+          const line = lineBuffer.slice(0, i); lineBuffer = lineBuffer.slice(i + 1);
+          if (line.trim()) onLine?.(line.trimEnd());
+        }
+        if (lineBuffer.length > 8192) { onLine?.(lineBuffer.slice(-8192)); lineBuffer = ''; }
+      };
+      const finish = (e, code) => {
+        if (done) return;
+        done = true;
+        bounded.removeEventListener('abort', onAbort);
+        try { conn?.end(); } catch {}
+        if (e) reject(e); else resolve({ code, out: out.trim(), err: err.trim() });
+      };
+      const onAbort = () => finish(bounded.reason);
+      bounded.addEventListener('abort', onAbort, { once: true });
+      connect({ host, port, home, signal: bounded })
+        .then((c) => {
+          if (done) { c.end(); return; }
+          conn = c;
+          conn.exec(command, (execErr, stream) => {
+            if (execErr) return finish(execErr);
+            stream.on('data', (d) => { out = tail(out, d); emit(d); });
+            stream.stderr.on('data', (d) => { err = tail(err, d); emit(d); });
+            stream.on('exit', (code) => { exitCode = code; });
+            // 'close' fires after streams drain — the ssh2 analog of spawn 'close'
+            stream.on('close', () => finish(null, exitCode));
+            // A command that exits before reading stdin surfaces here, like
+            // the EPIPE path in the spawn backend.
+            stream.on('error', (e) => finish(e));
+            try {
+              if (stdin !== undefined) stream.end(stdin); else stream.end();
+            } catch (e) { finish(e); }
+          });
+        })
+        .catch((e) => finish(e));
+    }), { timeoutMs, signal });
+  },
+
+  async runStrict(context) {
+    const r = await this.run(context);
+    if (r.code !== 0) throw new Error(`ssh command failed (${r.code}): ${r.err || 'no stderr'}`);
+    return r.out;
+  },
+
+  /** SHA256:… host-key fingerprint from the known_hosts file, or null. */
+  async fingerprint({ home, host, port }) {
+    const pattern = knownHostsPattern(host, port);
+    for (const [field, keyType, key] of readKnownHosts(home)) {
+      if (fieldMatches(field, pattern)) {
+        try {
+          void keyType;
+          return sha256Fingerprint(Buffer.from(key, 'base64'));
+        } catch { return null; }
+      }
+    }
+    return null;
+  },
+
+  // The JS keypair generator lands with the pure-JS ed25519/OpenSSH writer;
+  // until then iOS key creation is intentionally unavailable.
+  async generateKey() {
+    throw new Error('JS SSH key generation not implemented yet');
+  },
+
+  // ssh2 cannot open OpenSSH streamlocal (unix→unix) channels. iOS attach
+  // will use a TCP forwardOut against pi-serverd's loopback listener instead;
+  // until that lands, attaching stays spawn-only.
+  async openStreamlocalTunnel() {
+    throw new Error('unix-socket SSH tunnels are not supported on iOS yet');
+  },
+};
+function withDeadlineJs(operation, options) { return withDeadline(operation, options); }

@@ -12,7 +12,8 @@ RUNTIME = ROOT / 'runtime'
 
 # Files that make up the mobile runtime payload (same set on both platforms).
 FILES = ['server.mjs', 'common.mjs', 'remote-env.mjs', 'env-server.mjs', 'pi-serverd.mjs',
-         'space-keystore.mjs', 'spaces-mobile.mjs', 'remote-client.mjs', 'remote-provision.mjs', 'remote-state.mjs', 'pi-spaces.mjs', 'package.json',
+         'space-keystore.mjs', 'spaces-mobile.mjs', 'remote-client.mjs', 'remote-provision.mjs', 'remote-state.mjs',
+         'ssh-transport.mjs', 'ssh-js-backend.mjs', 'pi-spaces.mjs', 'package.json',
          'package-lock.json', 'public', 'node_modules']
 
 
