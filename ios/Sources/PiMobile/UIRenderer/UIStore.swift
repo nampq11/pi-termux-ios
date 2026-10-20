@@ -6,7 +6,8 @@ import SwiftUI
 // SwiftUI views read the nodes. A `set` op touches one node, so only the views
 // reading that node update, which is the same fine-grained model as Solid.
 //
-// Messages: {seq, ops: [...]}. Ops (see uikit/web/renderer.js for the web twin):
+// Messages: {seq, ops: [...]}. Ops (see Terrarium's uikit web renderer for the
+// web twin: https://github.com/mitsuhiko/terrarium):
 //   ["mount", parentId, beforeId|null, {i, t, p, c}]   build a subtree, insert it
 //   ["move", parentId, id, beforeId|null]                reorder
 //   ["unmount", id]                                      remove (and forget the subtree)

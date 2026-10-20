@@ -332,7 +332,7 @@ The Swift shell mirrors the Android app piece by piece:
 
 | Android | iOS |
 |---|---|
-| `MainActivity` (WebView, poll port/token, external links → browser) | `BridgeWebView` (WKWebView, same handshake, ATS loopback exception in `Info.plist`) |
+| `MainActivity` (WebView, poll port/token, external links → browser) | `PiMobileApp`/`BridgeScreen` (native SwiftUI `AgentView`, polls port/token; external links → browser) |
 | `PiService` (foreground service, spawn `node server.mjs`, supervisor restart) | `NodeEngine` (dedicated 8 MB thread, `node_start`; no supervisor — see limits below) |
 | `RuntimeInstaller` (extract tar assets, version stamp) | `RuntimeInstaller` (extract STORED zip payload + stamp; `RuntimeArchive` is a tiny dependency-free unzip) |
 | Termux rootfs (`rootfs.bin`) | — (nothing is exec'd; the engine is a framework) |
