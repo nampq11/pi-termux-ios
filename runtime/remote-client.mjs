@@ -46,6 +46,16 @@ export async function attachRemote({ ssh, prefix = '', socketDir, serverId, remo
   const sshExec = (cmd) => backend.runStrict({ prefix, home, host: sshHost, port: sshPort, command: cmd, signal: alive, timeoutMs });
   const remotePath = remoteSock || `${await sshExec('echo $HOME')}/.pi-serverd/server.sock`;
   const sid = serverId || await sshExec('cat ~/.pi-serverd/server-id');
+  // Pure-JS backends (iOS) cannot open streamlocal channels; they bridge the
+  // local unix socket over direct-tcpip to pi-serverd's loopback TCP listener
+  // instead. The listener publishes its port in server.tcp (0600) — missing
+  // file means the remote daemon predates it, which the open() error explains.
+  let remoteTcpPort = null;
+  if (!remoteSock && typeof backend.openTcpTunnel === 'function') {
+    const r = await backend.run({ prefix, home, host: sshHost, port: sshPort, command: 'cat ~/.pi-serverd/server.tcp 2>/dev/null', signal: alive, timeoutMs });
+    const m = /^127\.0\.0\.1:(\d{1,5})$/.exec(r.out.trim());
+    if (r.code === 0 && m) remoteTcpPort = Number(m[1]);
+  }
   const hostKey = await sshHostFingerprint(ssh, prefix, { signal: alive, timeoutMs });
 
   let tunnel = null, client = null, opening = null;
@@ -69,7 +79,9 @@ export async function attachRemote({ ssh, prefix = '', socketDir, serverId, remo
     try {
       await withDeadline(async (bounded) => {
         try { unlinkSync(localSock); } catch {}
-        const t = backend.openStreamlocalTunnel({ prefix, home, host: sshHost, port: sshPort, localPath: localSock, remotePath });
+        const t = remoteTcpPort
+          ? backend.openTcpTunnel({ prefix, home, host: sshHost, port: sshPort, localPath: localSock, remoteHost: '127.0.0.1', remotePort: remoteTcpPort })
+          : backend.openStreamlocalTunnel({ prefix, home, host: sshHost, port: sshPort, localPath: localSock, remotePath });
         tunnel = t;
         let err = '', exited = null;
         const abortTunnel = () => t.kill();

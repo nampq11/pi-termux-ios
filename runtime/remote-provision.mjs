@@ -116,7 +116,11 @@ export async function stopRemoteServer({ ssh, prefix = '', log = () => {} }) {
   await sshRun(ctx, `tmux kill-session -t ${TMUX_SESSION} 2>/dev/null; true`);
   return true;
 }
-const RUN_CMD = `${PRELUDE}cd "$HOME/${REMOTE_DIR}" && exec node pi-serverd.mjs`;
+// Pure-JS backends (iOS) attach over pi-serverd's loopback TCP listener —
+// request it (0 = OS-assigned port, published in server.tcp). Spawn backends
+// keep streamlocal forwarding and don't touch this.
+const SERVERD_TCP_ENV = sshBackend().name === 'js' ? 'export PI_SERVERD_TCP_PORT=0; ' : '';
+const RUN_CMD = `${PRELUDE}cd "$HOME/${REMOTE_DIR}" && ${SERVERD_TCP_ENV}exec node pi-serverd.mjs`;
 const START_TMUX = `tmux has-session -t ${TMUX_SESSION} 2>/dev/null && exit 1; tmux new-session -d -s ${TMUX_SESSION} ${shq(`exec bash -l -c ${shq(RUN_CMD)}`)}`;
 const START_NOHUP = `cd "$HOME/${REMOTE_DIR}" || exit 1; if command -v setsid >/dev/null 2>&1; then L=setsid; else L=""; fi; nohup $L bash -l -c ${shq(RUN_CMD)} >> "$HOME/${REMOTE_DIR}/serverd.log" 2>&1 < /dev/null &`;
 /** Recover a promoted release OR the gap between renames. Inspect remote

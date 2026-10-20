@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { attachRemote } from './remote-client.mjs';
+import { setSshBackend } from './ssh-transport.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 function fixture(mode = 'proxy') {
@@ -150,4 +151,83 @@ test('hung RPC times out and disconnect during reconnect cancels the tunnel', as
   await sleep(100);
   assert.deepEqual(readdirSync(f.socketDir), []);
   await assert.rejects(remote.reconnect(), /disconnected/);
+});
+
+// Tunnel selection: pure-JS backends (iOS) bridge over pi-serverd's loopback
+// TCP listener when it publishes server.tcp; spawn backends keep streamlocal
+// forwarding no matter what the remote publishes.
+function selectionBackend({ home, tcpFile }) {
+  const opened = [];
+  const sentinel = new Error('sentinel-stop');
+  return {
+    opened, sentinel,
+    name: 'fake',
+    async run({ command }) {
+      if (/echo \$HOME/.test(command)) return { code: 0, out: home, err: '' };
+      if (/server\.tcp/.test(command)) return tcpFile;
+      return { code: 0, out: '', err: '' };
+    },
+    async runStrict(ctx) { const r = await this.run(ctx); if (r.code !== 0) throw new Error('fail'); return r.out; },
+    async fingerprint() { return 'SHA256:fake'; },
+    openTcpTunnel(opts) { opened.push(['tcp', opts]); throw sentinel; },
+    openStreamlocalTunnel(opts) { opened.push(['streamlocal', opts]); throw sentinel; },
+  };
+}
+
+test('attachRemote picks the TCP tunnel when the backend supports it and server.tcp exists', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'pi-tunnel-pick-'));
+  const backend = selectionBackend({
+    home: dir,
+    tcpFile: { code: 0, out: '127.0.0.1:4567\n', err: '' },
+  });
+  setSshBackend(backend);
+  try {
+    await assert.rejects(
+      () => attachRemote({ ssh: 'me@host', serverId: 'sid-1', socketDir: path.join(dir, 'tun') }),
+      (e) => e === backend.sentinel);
+    assert.deepEqual(backend.opened.map(([kind]) => kind), ['tcp']);
+    assert.equal(backend.opened[0][1].remoteHost, '127.0.0.1');
+    assert.equal(backend.opened[0][1].remotePort, 4567);
+  } finally {
+    setSshBackend(null);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('attachRemote falls back to streamlocal when the remote has no server.tcp', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'pi-tunnel-pick-'));
+  const backend = selectionBackend({
+    home: dir,
+    tcpFile: { code: 1, out: '', err: '' },
+  });
+  setSshBackend(backend);
+  try {
+    await assert.rejects(
+      () => attachRemote({ ssh: 'me@host', serverId: 'sid-1', socketDir: path.join(dir, 'tun') }),
+      (e) => e === backend.sentinel);
+    assert.deepEqual(backend.opened.map(([kind]) => kind), ['streamlocal']);
+    assert.ok(backend.opened[0][1].remotePath.endsWith('/.pi-serverd/server.sock'));
+  } finally {
+    setSshBackend(null);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('spawn-shaped backends keep streamlocal even when server.tcp exists', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'pi-tunnel-pick-'));
+  const backend = selectionBackend({
+    home: dir,
+    tcpFile: { code: 0, out: '127.0.0.1:4567\n', err: '' },
+  });
+  delete backend.openTcpTunnel; // the spawn backend has no TCP tunnel
+  setSshBackend(backend);
+  try {
+    await assert.rejects(
+      () => attachRemote({ ssh: 'me@host', serverId: 'sid-1', socketDir: path.join(dir, 'tun') }),
+      (e) => e === backend.sentinel);
+    assert.deepEqual(backend.opened.map(([kind]) => kind), ['streamlocal']);
+  } finally {
+    setSshBackend(null);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -15,8 +15,9 @@ import { fileURLToPath } from 'node:url';
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
-import { createUnixServer } from '@earendil-works/pi-server/unix';
-import { SessionNotFoundError } from '@earendil-works/pi-server';
+import { createUnixListener } from '@earendil-works/pi-server/unix';
+import { Server, SessionNotFoundError } from '@earendil-works/pi-server';
+import { createTcpListener } from './serverd-tcp.mjs';
 import { SpaceService, StaticIdentity, withSpaceService, startConfiguredFederation } from './pi-spaces.mjs';
 import {
   acquireOwnerLock, createCredentialStore, createEventHub, createModelCatalog,
@@ -248,8 +249,29 @@ const spaceIdentity = new StaticIdentity(spacePeer ? { [spacePeer]: { principal:
 const spaceService = new SpaceService({ host: harness, ctx, identity: spaceIdentity, hostId: serverId, authorityId: serverId });
 host.serverServices = withSpaceService(host.serverServices, federation?.service || spaceService, federation?.trustedConnection || (() => ({ peerId: spacePeer || '' })));
 
-const server = createUnixServer(host, { serverId, path: SOCK_PATH, mode: 0o600 });
+// Loopback TCP listener: opt-in via PI_SERVERD_TCP_PORT (0 = OS-assigned).
+// Pure-JS SSH clients (iOS) cannot open OpenSSH streamlocal channels and
+// forwardOut into a TCP port instead; the chosen port is published in
+// server.tcp so the client can read it over a plain exec.
+const tcpPortEnv = process.env.PI_SERVERD_TCP_PORT;
+let tcpListener = null;
+if (tcpPortEnv !== undefined && tcpPortEnv !== '') {
+  const requested = Number(tcpPortEnv);
+  if (!Number.isInteger(requested) || requested < 0 || requested > 65535) {
+    throw new Error(`PI_SERVERD_TCP_PORT must be an integer between 0 and 65535, got ${tcpPortEnv}`);
+  }
+  tcpListener = createTcpListener({ port: requested });
+}
+const listeners = [createUnixListener({ path: SOCK_PATH, mode: 0o600 })];
+if (tcpListener) listeners.push(tcpListener);
+const server = new Server(host, { listeners, serverId });
 await server.start();
+if (tcpListener) {
+  const bound = tcpListener.boundPort;
+  // 0600: the port hint lives in the same private state dir as server.sock.
+  writeFileAtomic(`${STATE_DIR}/server.tcp`, `127.0.0.1:${bound}\n`);
+  console.log(`pi-serverd tcp on 127.0.0.1:${bound}`);
+}
 console.log(`pi-serverd on ${SOCK_PATH} (serverId ${serverId})`);
 
 let stopping = false;
@@ -258,6 +280,7 @@ async function shutdown(signal) {
   stopping = true;
   console.log(`pi-serverd: ${signal}, closing`);
   try { await server.close?.(); } catch {}
+  try { unlinkSync(`${STATE_DIR}/server.tcp`); } catch {}
   try { await events.close(); } catch {}
   try { await stopSpaces(); } catch {}
   try { await harness.close(ctx); } catch (e) { console.error('harness.close:', e?.message || e); }

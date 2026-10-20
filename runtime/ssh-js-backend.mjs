@@ -7,7 +7,9 @@
 // a changed key refuses the connection. Hashed |1| entries are matched too,
 // so files written by ssh-keygen/OpenSSH stay authoritative.
 import crypto from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import net from 'node:net';
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import SSH2 from 'ssh2';
 import { withDeadline } from './ssh-transport.mjs';
@@ -177,10 +179,64 @@ export const jsSshBackend = {
   },
 
   // ssh2 cannot open OpenSSH streamlocal (unix→unix) channels. iOS attach
-  // will use a TCP forwardOut against pi-serverd's loopback listener instead;
-  // until that lands, attaching stays spawn-only.
+  // uses openTcpTunnel against pi-serverd's loopback listener instead.
   async openStreamlocalTunnel() {
-    throw new Error('unix-socket SSH tunnels are not supported on iOS yet');
+    throw new Error('unix-socket SSH tunnels are not supported on iOS; the remote pi-serverd must expose its loopback TCP listener (~/.pi-serverd/server.tcp missing)');
+  },
+
+  /** Local unix socket ⇄ ssh2 direct-tcpip bridge. Same thin-handle contract
+   * as the spawn backend's openStreamlocalTunnel: the caller owns waiting for
+   * the socket path (the listener binds asynchronously, like `ssh -N -L`),
+   * retry policy, and teardown via kill(). A dropped SSH connection surfaces
+   * as proc 'exit' (plus 'error' with the reason), matching process semantics. */
+  openTcpTunnel({ home, host, port, localPath, remoteHost = '127.0.0.1', remotePort }) {
+    const proc = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    let server = null, dead = false;
+    const sockets = new Set();
+    const die = (e) => {
+      if (dead) return;
+      dead = true;
+      if (e) proc.emit('error', e);
+      proc.emit('exit', 1);
+    };
+    // Auth/trust identical to run(); the host key is already pinned by
+    // provisioning. The bind delay and ssh2 handshake race out like
+    // `ssh -N -L` does: the caller polls for the socket path, and each
+    // accepted connection awaits SSH readiness before forwardOut.
+    const ready = connect({ host, port, home });
+    ready.catch(die);
+    // the no-op catch: a handshake losing the race with kill() must not
+    // surface as an unhandled rejection — die() already reported the exit
+    ready.then((c) => c.on('close', () => die(new Error('ssh connection closed')))).catch(() => {});
+    server = net.createServer((socket) => {
+      sockets.add(socket);
+      socket.once('close', () => sockets.delete(socket));
+      ready.then((c) => {
+        if (dead) { socket.destroy(); return; }
+        c.forwardOut('127.0.0.1', 0, remoteHost, remotePort, (err, channel) => {
+          if (err) { proc.stderr.emit('data', `forward failed: ${err.message}\n`); socket.destroy(); return; }
+          socket.pipe(channel);
+          channel.pipe(socket);
+          const bye = () => { try { socket.destroy(); } catch {} try { channel.end(); } catch {} };
+          socket.once('close', bye);
+          channel.once('close', bye);
+        });
+      }).catch(() => socket.destroy());
+    });
+    server.on('error', die);
+    // stale socket file would EADDRINUSE the async bind, exactly like ssh -L
+    try { unlinkSync(localPath); } catch {}
+    server.listen(localPath);
+    return {
+      proc,
+      kill: () => {
+        try { server?.close(); } catch {}
+        for (const s of sockets) { try { s.destroy(); } catch {} }
+        ready.then((c) => { try { c.end(); } catch {} }).catch(() => {});
+        die();
+      },
+    };
   },
 };
 function withDeadlineJs(operation, options) { return withDeadline(operation, options); }
