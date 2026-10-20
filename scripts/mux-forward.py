@@ -9,13 +9,14 @@ stock iproxy binary is not always installed.
 Usage: mux-forward.py <local-port> <device-port> [udid]
 Prints the matched usbmux device id, then serves until killed.
 """
+import os
 import select
 import socket
 import struct
 import sys
 import threading
 
-MUX = '/var/run/usbmuxd'
+MUX = os.environ.get('USBMUXD_SOCKET_ADDRESS', '/var/run/usbmuxd')
 PLIST_HEAD = '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
 
 
@@ -74,7 +75,8 @@ def tunnel_to(device_id, port):
         f'<key>DeviceID</key><integer>{device_id}</integer>'
         f'<key>PortNumber</key><integer>{port_number}</integer>'))
     reply = read_reply(sock)
-    if '<integer>0</integer>' not in reply:
+    # usbmuxd answers success with an empty dict; failure carries Number=errno
+    if '<key>Number</key>' in reply:
         raise ConnectionError(f'usbmuxd connect refused: {reply[:200]}')
     return sock
 
