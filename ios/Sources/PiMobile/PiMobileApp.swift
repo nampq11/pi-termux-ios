@@ -14,7 +14,7 @@ struct PiMobileApp: App {
                 .environmentObject(controller)
                 .preferredColorScheme(.dark)
         }
-        .onChange(of: scenePhase) { phase in
+        .onChange(of: scenePhase) { _, phase in
             Self.log.info("scenePhase -> \(String(describing: phase), privacy: .public)")
         }
     }
@@ -22,6 +22,7 @@ struct PiMobileApp: App {
 
 struct BridgeScreen: View {
     @EnvironmentObject private var controller: RuntimeController
+    @State private var uiHost = UIHost()
 
     var body: some View {
         ZStack {
@@ -31,11 +32,17 @@ struct BridgeScreen: View {
             case .preparing, .starting:
                 WaitingView(phase: controller.phase)
             case .ready(let url):
-                BridgeWebView(url: url) {
+                BridgeWebView(url: url, uiHost: uiHost) {
                     controller.bridgeLoadFailed()
                 }
             case .failed(let message):
                 FailureView(message: message)
+            }
+            if uiHost.visible {
+                UIAppRoot(store: uiHost.store)
+                    .overlay { if uiHost.restarting { ProgressView().controlSize(.large) } }
+                    .transition(.move(edge: .bottom))
+                    .zIndex(1)
             }
         }
         .task { controller.boot() }

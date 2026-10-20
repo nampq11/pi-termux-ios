@@ -28,6 +28,7 @@ Thumbs.db
 /ios/Frameworks/
 /ios/Sources/PiMobile/Resources/runtime.zip
 /ios/Sources/PiMobile/Resources/payload.sha256
+/.build/
 /ios/.build/
 /ios/xtool/
 /ios/.bsp/

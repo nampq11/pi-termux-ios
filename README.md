@@ -359,7 +359,9 @@ processes). Android rendering is byte-identical.
 **Honest limitations of the iOS sandbox:**
 
 - **Works locally:** chat with models over durable SQLite sessions, session
-  management, accounts (API keys + OAuth via the system browser), the web UI.
+  management, accounts (API keys + OAuth via the system browser), the web UI,
+  and native SwiftUI UI kit rendering (based on [Terrarium](https://github.com/mitsuhiko/terrarium)'s
+  `uikit` and `UIRenderer`: screens, navigation stacks, tabs, inputs, and canvas).
 - **Cannot work without processes:** bash tool calls, ripgrep, git, the
   terminal page (PTY), SSH clients/tunnels and the npm self-update rely on
   child processes — spawns are denied per call on iOS and the affected pages
