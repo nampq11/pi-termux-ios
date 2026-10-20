@@ -1,7 +1,9 @@
 // SSH Unix-socket bridge. Private sockets keep other phone apps out of the
 // unauthenticated pi-server protocol; SSH authenticates the remote peer.
-import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
+import { sshBackend, withDeadline, sshBaseOptions } from './ssh-transport.mjs';
+
+export { withDeadline, sshBaseOptions } from './ssh-transport.mjs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -10,25 +12,6 @@ import { Client } from '@earendil-works/pi-client';
 import { createUnixTransportFactory } from '@earendil-works/pi-client/unix';
 
 const strictJson = (args) => JSON.parse(JSON.stringify(args ?? []));
-
-/** Bound operations even when the underlying peer never answers. */
-export async function withDeadline(operation, { timeoutMs = 15_000, signal } = {}) {
-  const timerController = new AbortController();
-  const timer = setTimeout(() => timerController.abort(new Error(`remote timeout after ${timeoutMs / 1000}s`)), timeoutMs);
-  const bounded = signal ? AbortSignal.any([signal, timerController.signal]) : timerController.signal;
-  let onAbort;
-  try {
-    bounded.throwIfAborted();
-    const cancelled = new Promise((_, reject) => {
-      onAbort = () => reject(bounded.reason);
-      bounded.addEventListener('abort', onAbort, { once: true });
-    });
-    return await Promise.race([operation(bounded), cancelled]);
-  } finally {
-    clearTimeout(timer);
-    if (onAbort) bounded.removeEventListener('abort', onAbort);
-  }
-}
 
 /** Reject SSH options and anything requiring shell quoting. */
 export function parseSshTarget(value) {
@@ -40,48 +23,16 @@ export function parseSshTarget(value) {
   return { host: `${match[1] ?? ''}${match[2]}`, port };
 }
 
-export function sshBaseOptions(home, port) {
-  return ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new',
-    '-o', `UserKnownHostsFile=${home}/.ssh/known_hosts`, '-i', `${home}/.ssh/id_ed25519`,
-    '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
-    ...(port ? ['-p', String(port)] : [])];
-}
-
-function capture(command, args, options) {
-  return withDeadline((signal) => new Promise((resolve, reject) => {
-    const c = spawn(command, args, { env: process.env });
-    let out = '', err = '';
-    const abort = () => { c.kill('SIGKILL'); reject(signal.reason); };
-    signal.addEventListener('abort', abort, { once: true });
-    c.stdout.on('data', (d) => { out = (out + d).slice(-32_768); });
-    c.stderr.on('data', (d) => { err = (err + d).slice(-32_768); });
-    c.on('error', reject);
-    c.on('close', (code) => {
-      signal.removeEventListener('abort', abort);
-      code === 0 ? resolve(out.trim()) : reject(new Error(`ssh command failed (${code}): ${err.trim() || 'no stderr'}`));
-    });
-    c.stdin.end();
-  }), options);
-}
-
 export async function sshHostFingerprint(ssh, prefix = '', options = {}) {
   const { host, port } = parseSshTarget(ssh);
   const home = process.env.HOME || '/tmp';
-  const bare = host.replace(/^.*@/, '');
-  try {
-    const out = await capture(`${prefix}/bin/ssh-keygen`, ['-l', '-F', port ? `[${bare}]:${port}` : bare,
-      '-f', `${home}/.ssh/known_hosts`], options);
-    return /(SHA256:\S+)/.exec(out)?.[1] ?? null;
-  } catch (e) {
-    if (options.signal?.aborted) throw e;
-    return null;
-  }
+  return sshBackend().fingerprint({ prefix, home, host, port, timeoutMs: options.timeoutMs, signal: options.signal });
 }
 
 export async function attachRemote({ ssh, prefix = '', socketDir, serverId, remoteSock,
   signal, timeoutMs = 15_000, requestTimeoutMs = 35_000 }) {
-  const sshBin = `${prefix}/bin/ssh`;
   const { host: sshHost, port: sshPort } = parseSshTarget(ssh);
+  const backend = sshBackend();
   const home = process.env.HOME || '/tmp';
   const lifetime = new AbortController();
   const alive = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
@@ -92,8 +43,7 @@ export async function attachRemote({ ssh, prefix = '', socketDir, serverId, remo
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const localSock = path.join(dir, name);
-  const sshOpts = sshBaseOptions(home, sshPort);
-  const sshExec = (cmd) => capture(sshBin, [...sshOpts, '--', sshHost, cmd], { signal: alive, timeoutMs });
+  const sshExec = (cmd) => backend.runStrict({ prefix, home, host: sshHost, port: sshPort, command: cmd, signal: alive, timeoutMs });
   const remotePath = remoteSock || `${await sshExec('echo $HOME')}/.pi-serverd/server.sock`;
   const sid = serverId || await sshExec('cat ~/.pi-serverd/server-id');
   const hostKey = await sshHostFingerprint(ssh, prefix, { signal: alive, timeoutMs });
@@ -111,7 +61,7 @@ export async function attachRemote({ ssh, prefix = '', socketDir, serverId, remo
     const c = client, t = tunnel;
     client = null; tunnel = null;
     try { await c?.dispose(); } catch {}
-    try { t?.kill('SIGKILL'); } catch {}
+    t?.kill();
     try { unlinkSync(localSock); } catch {}
   }
 
@@ -119,16 +69,14 @@ export async function attachRemote({ ssh, prefix = '', socketDir, serverId, remo
     try {
       await withDeadline(async (bounded) => {
         try { unlinkSync(localSock); } catch {}
-        const t = spawn(sshBin, ['-N', ...sshOpts, '-o', 'ExitOnForwardFailure=yes',
-          '-o', 'StreamLocalBindUnlink=yes', '-o', 'StreamLocalBindMask=0177',
-          '-L', `${localSock}:${remotePath}`, '--', sshHost], { env: process.env });
+        const t = backend.openStreamlocalTunnel({ prefix, home, host: sshHost, port: sshPort, localPath: localSock, remotePath });
         tunnel = t;
         let err = '', exited = null;
-        const abortTunnel = () => t.kill('SIGKILL');
+        const abortTunnel = () => t.kill();
         bounded.addEventListener('abort', abortTunnel, { once: true });
-        t.stderr.on('data', (d) => { err = (err + d).slice(-32_768); });
-        t.on('exit', (code) => { exited = code ?? -1; if (tunnel === t) fireLost(`ssh tunnel exited ${exited}`); });
-        t.on('error', (e) => { exited = -1; err += e.message; });
+        t.proc.stderr.on('data', (d) => { err = (err + d).slice(-32_768); });
+        t.proc.on('exit', (code) => { exited = code ?? -1; if (tunnel === t) fireLost(`ssh tunnel exited ${exited}`); });
+        t.proc.on('error', (e) => { exited = -1; err += e.message; });
         try {
           while (!existsSync(localSock)) {
             bounded.throwIfAborted();

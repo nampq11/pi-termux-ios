@@ -7,7 +7,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { attachRemote, parseSshTarget, sshBaseOptions, withDeadline } from './remote-client.mjs';
+import { attachRemote, parseSshTarget, withDeadline } from './remote-client.mjs';
+import { sshBackend } from './ssh-transport.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const REMOTE_FILES = ['pi-serverd.mjs', 'common.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json'];
@@ -53,36 +54,7 @@ function makeCtx(ssh, prefix) {
 }
 
 export function sshRun({ prefix, host, port, home }, script, { stdin, onLine, timeoutMs = 60_000, signal } = {}) {
-  return withDeadline((bounded) => new Promise((resolve, reject) => {
-    const c = spawn(`${prefix}/bin/ssh`, [...sshBaseOptions(home, port), '--', host, remoteBash(script)], { env: process.env });
-    let out = '', err = '', done = false;
-    const tail = (v, d) => (v + d).slice(-32_768); // don't keep unlimited npm output
-    let lineBuffer = '';
-    const emit = (v) => {
-      lineBuffer += String(v);
-      let i;
-      while ((i = lineBuffer.indexOf('\n')) >= 0) {
-        const line = lineBuffer.slice(0, i); lineBuffer = lineBuffer.slice(i + 1);
-        if (line.trim()) onLine?.(line.trimEnd());
-      }
-      if (lineBuffer.length > 8192) { onLine?.(lineBuffer.slice(-8192)); lineBuffer = ''; }
-    };
-    c.stdout.on('data', (d) => { out = tail(out, d); emit(d); });
-    c.stderr.on('data', (d) => { err = tail(err, d); emit(d); });
-    const abort = () => { c.kill('SIGKILL'); finish(bounded.reason); };
-    const finish = (e, code) => {
-      if (done) return;
-      done = true;
-      bounded.removeEventListener('abort', abort);
-      if (e) reject(e); else resolve({ code, out: out.trim(), err: err.trim() });
-    };
-    bounded.addEventListener('abort', abort, { once: true });
-    c.on('error', finish);
-    // Early SSH failure during upload must not crash the bridge with EPIPE.
-    c.stdin.on('error', (e) => { c.kill('SIGKILL'); finish(e); });
-    c.on('close', (code) => finish(null, code));
-    if (stdin !== undefined) c.stdin.end(stdin); else c.stdin.end();
-  }), { timeoutMs, signal });
+  return sshBackend().run({ prefix, host, port, home, command: remoteBash(script), stdin, onLine, timeoutMs, signal });
 }
 
 // The lock is owned by pi-serverd. Inspect /proc for the exact PID and expected
