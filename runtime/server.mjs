@@ -313,6 +313,12 @@ function serveStatic(res, pathname) {
   try { st = statSync(filePath); } catch {}
   if (!st?.isFile()) { filePath = path.join(PUBLIC, 'index.html'); }
   res.writeHead(200, { 'content-type': MIME[path.extname(filePath)] || 'application/octet-stream' });
+  if (IOS && path.extname(filePath) === '.html') {
+    // menu.js uses this flag to hide pages that need child processes
+    // (ssh, PTY), which the in-process iOS engine cannot provide
+    const html = readFileSync(filePath, 'utf8').replace('</head>', '<script>window.PI_MOBILE_IOS=1</script></head>');
+    return res.end(html);
+  }
   const stream = createReadStream(filePath);
   stream.on('error', () => { try { res.destroy(); } catch {} });
   stream.pipe(res);

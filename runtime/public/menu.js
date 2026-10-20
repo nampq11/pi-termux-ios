@@ -3,6 +3,10 @@ import { API } from './constants.js';
 // Shared header setup and bottom navigation for every page.
 // renderMenu() is called once per page and returns the session token.
 export function renderMenu() {
+  // On iOS the Node engine runs in-process and child processes are denied:
+  // pages that depend on ssh/PTY are hidden. The server injects the flag.
+  const ios = window.PI_MOBILE_IOS === 1;
+  const worksOnIos = (href) => !ios || !['/remote.html', '/terminal.html', '/clients.html'].includes(href);
   const token = new URLSearchParams(location.search).get('token')
     || localStorage.getItem('pi-token') || '';
   if (token) localStorage.setItem('pi-token', token);
@@ -51,7 +55,7 @@ export function renderMenu() {
       { href: '/steuerung.html', icon: '⚙', label: 'Spaces-Steuerung' },
       { href: '/keys.html',    icon: '⚿',  label: 'Accounts' },
     ];
-    for (const t of tabs) {
+    for (const t of tabs.filter((t) => worksOnIos(t.href))) {
       const a = document.createElement('a');
       a.href = q(t.href);
       a.innerHTML = `<span class="nav-icon">${t.icon}</span>${t.label}`;
@@ -69,7 +73,7 @@ export function renderMenu() {
       localStorage.setItem('pi-ssh-target', target);
       location.href = `/terminal.html?token=${encodeURIComponent(token)}&ssh=${encodeURIComponent(target)}`;
     });
-    sheet.appendChild(sshA);
+    if (!ios) sheet.appendChild(sshA);
     const close = document.createElement('span');
     close.id = 'nav-sheet-close';
     close.textContent = '✕  close';
@@ -104,7 +108,7 @@ export function renderMenu() {
     { key: 'spaces', href: '/spaces.html', icon: '▦', label: 'Spaces' },
     { key: 'keys',    href: '/keys.html',    icon: '⚿',  label: 'Keys' },
   ];
-  for (const tab of tabs) {
+  for (const tab of tabs.filter((tab) => worksOnIos(tab.href))) {
     const a = document.createElement('a');
     a.href = q(tab.href);
     if ((PAGES[tab.key] ?? []).includes(page)) a.className = 'active';

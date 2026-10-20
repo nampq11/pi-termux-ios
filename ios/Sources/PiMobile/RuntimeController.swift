@@ -23,6 +23,10 @@ final class RuntimeController: ObservableObject {
 
     private var booting = false
     private var reloadAttempts = 0
+    /// Loopback-only, chosen once so the bridge stays reachable for USB
+    /// debugging (`iproxy 41943:41943` + curl from the host) — the port file
+    /// handshake stays identical to Android regardless.
+    static let bridgePort = 41_943
 
     private var root: URL { RuntimeInstaller.rootDirectory() }
     private var stateDir: URL { root.appendingPathComponent("home/.pi-mobile", isDirectory: true) }
@@ -82,7 +86,7 @@ final class RuntimeController: ObservableObject {
             "HOME": root.appendingPathComponent("home").path,
             "TMPDIR": root.appendingPathComponent("tmp").path,
             "PI_WORKDIR": root.appendingPathComponent("work").path,
-            "PI_PORT": "0",
+            "PI_PORT": String(Self.bridgePort),
             "PI_PLATFORM": "ios",
             "TERM": "dumb",
             "LANG": "C.UTF-8",
