@@ -465,7 +465,8 @@ public final class AppModel {
 
     public func loadAgentAccounts() async {
         let defaultProviders = [
-            ("zai", "z.ai (GLM)", true),
+            ("zai", "Z.AI (Global / z.ai)", true),
+            ("zai-coding-cn", "Z.AI (BigModel CN / bigmodel.cn)", true),
             ("anthropic", "Anthropic Claude", true),
             ("openai", "OpenAI", true),
             ("openrouter", "OpenRouter", false),
