@@ -76,6 +76,9 @@ public final class AppModel {
             await loadAgentAccounts()
             await loadAgentModels()
             await loadConversations()
+            if self.agent.state.model == nil, let first = self.agentModels.first {
+                self.agentSetModel(first)
+            }
         }
     }
 
@@ -168,11 +171,24 @@ public final class AppModel {
         case "message_end":
             if let liveId = currentLiveItemId,
                let idx = agent.state.items.firstIndex(where: { $0.id == liveId }) {
-                agent.state.items[idx].streaming = false
+                agent.state.items.remove(at: idx)
             }
             currentLiveItemId = nil
             if let entry = json["entry"] as? [String: Any] {
                 applyEntry(entry)
+            }
+
+        case "submission":
+            if let rec = json["record"] as? [String: Any],
+               let status = rec["status"] as? String,
+               status == "unanswered" {
+                let reason = rec["reason"] as? String ?? "unknown"
+                agent.state.busy = false
+                if reason == "no_model" {
+                    agent.state.error = "No model is configured. Please select a model or add an API key under Accounts."
+                } else {
+                    agent.state.error = "Request unanswered: \(reason)"
+                }
             }
 
         case "entry_appended":
@@ -439,12 +455,16 @@ public final class AppModel {
 
     public func loadAgentAccounts() async {
         let defaultProviders = [
+            ("zai", "z.ai (GLM)", true),
             ("anthropic", "Anthropic Claude", true),
             ("openai", "OpenAI", true),
             ("openrouter", "OpenRouter", false),
             ("google", "Google Gemini", false),
             ("deepseek", "DeepSeek", false),
-            ("groq", "Groq", false)
+            ("groq", "Groq", false),
+            ("mistral", "Mistral", false),
+            ("xai", "xAI (Grok)", false),
+            ("minimax", "MiniMax", false)
         ]
 
         var savedKeys = Set<String>()
@@ -457,6 +477,10 @@ public final class AppModel {
             }
         } catch {}
 
+        if !savedKeys.isEmpty {
+            agent.state.signedIn = true
+        }
+
         agentAccounts = defaultProviders.map { id, name, featured in
             AgentAccount(
                 id: id,
@@ -467,7 +491,6 @@ public final class AppModel {
             )
         }
     }
-
     public func agentLogin(_ provider: String, _ type: String) async {
         agentLoginError = nil
         let prompt = AgentHost.Prompt(
@@ -483,6 +506,9 @@ public final class AppModel {
                     _ = try await self.post("/api/auth", body: ["provider": provider, "key": answer]) as [String: Any]
                     await self.loadAgentAccounts()
                     await self.loadAgentModels()
+                    if let first = self.agentModels.first(where: { $0.provider == provider }) ?? self.agentModels.first {
+                        self.agentSetModel(first)
+                    }
                 } catch {
                     self.agentLoginError = error.localizedDescription
                 }

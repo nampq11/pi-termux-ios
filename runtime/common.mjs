@@ -165,12 +165,16 @@ export async function pickModel(models) {
 export const agentOf = (view) => view?.value?.docs?.['pi.agent'] ?? {};
 export const isBusy = (view) => Boolean(view?.value?.docs?.['pi.live']?.run);
 
-/** Give a conversation without a model the current default (never overrides a choice). */
+/** Give a conversation without a model the current default (or fixes an uncredentialed model). */
 export async function ensureModel(conv, models, ctx) {
   const view = await conv.viewState(ctx);
   try {
-    if (agentOf(view).model) return agentOf(view).model;
-    const m = await pickModel(models);
+    const current = agentOf(view).model;
+    const available = await models.getAvailable().catch(() => []);
+    if (current && available.some(m => m.provider === current.provider && m.id === current.modelId)) {
+      return current;
+    }
+    const m = (await pickModel(models)) || (available[0] ? { provider: available[0].provider, modelId: available[0].id } : undefined);
     if (m) await conv.configure({ model: m }, ctx);
     return m;
   } finally { view.dispose?.(); }
