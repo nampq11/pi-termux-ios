@@ -8,7 +8,7 @@ import http from 'node:http';
 import { MobileSpaces } from './spaces-mobile.mjs';
 import { spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
-import { createReadStream, existsSync, readdirSync, readFileSync, readlinkSync, statSync, unlinkSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, unlinkSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -33,6 +33,24 @@ const WORKDIR = process.env.PI_WORKDIR || HOME_DIR;
 const AGENT_DIR = path.join(HOME_DIR, '.pi', 'agent');
 const AUTH_PATH = path.join(AGENT_DIR, 'auth.json');
 const STATE_DIR = path.join(HOME_DIR, '.pi-mobile');
+// iOS runs this script inside the app process (no child processes, the engine
+// cannot restart, and process.exit would kill the whole app). Fatal boot
+// errors are reported through this file; the Swift shell polls it.
+const IOS = process.env.PI_PLATFORM === 'ios';
+const FATAL_FILE = path.join(STATE_DIR, 'fatal');
+if (IOS) {
+  // last-resort guard before anything else runs: an uncaught exception during
+  // module init would kill the whole app (the engine runs in-process and
+  // cannot restart). Report via the fatal file; the app shell shows it.
+  process.on('uncaughtException', (error) => {
+    console.error('uncaughtException:', error?.stack || error);
+    try {
+      mkdirSync(STATE_DIR, { recursive: true });
+      try { unlinkSync(PORT_FILE); } catch {}
+      writeFileAtomic(FATAL_FILE, String(error?.message || error));
+    } catch {}
+  });
+}
 const mobileSpaces = new MobileSpaces(path.join(STATE_DIR, 'space-profile.json'));
 const PORT_FILE = path.join(STATE_DIR, 'port');
 const TOKEN_FILE = path.join(STATE_DIR, 'token');
@@ -93,7 +111,14 @@ function startPiUpdate() {
     piUpdate.running = false; piUpdate.done = true;
     piUpdate.ok = code === 0; piUpdate.version = piInstalledVersion();
     piUpdate.error = code !== 0 ? `npm exited with code ${code}` : null;
-    if (code === 0) { addLog(`pi updated to ${piUpdate.version} — restarting bridge…`); setTimeout(() => process.exit(0), 1500); }
+    if (code === 0) {
+      addLog(`pi updated to ${piUpdate.version} — restarting bridge…`);
+      setTimeout(() => {
+        // the in-process iOS engine cannot be restarted; relaunch the app instead
+        if (IOS) { addLog('restart skipped on iOS: relaunch the app to load the new version'); return; }
+        process.exit(0);
+      }, 1500);
+    }
   });
   child.on('error', (e) => { piUpdate.running = false; piUpdate.done = true; piUpdate.ok = false; piUpdate.error = e.message; });
   return true;
@@ -772,6 +797,7 @@ function startPty(ws, url) {
 // --- start / stop ------------------------------------------------------------
 
 await mkdir(WORKDIR, { recursive: true });
+let bootFailed = false;
 try {
   await initHarness();
 } catch (e) {
@@ -779,11 +805,16 @@ try {
   console.error('initHarness:', e?.stack || e);
   try { await harness.close(ctx); } catch {}
   releaseLock();
-  process.exit(1);
+  if (IOS) {
+    // no supervisor and no restart on iOS: surface the error to the app shell
+    try { writeFileAtomic(FATAL_FILE, String(e?.message || e)); } catch {}
+    bootFailed = true;
+  } else process.exit(1);
 }
-server.listen(Number(process.env.PI_PORT || 0), '127.0.0.1', async () => {
+if (!bootFailed) server.listen(Number(process.env.PI_PORT || 0), '127.0.0.1', async () => {
   listenPort = server.address().port;
   writeFileAtomic(PORT_FILE, String(listenPort), 0o600);
+  try { unlinkSync(FATAL_FILE); } catch {}
   console.log(`pi-mobile durable bridge on 127.0.0.1:${listenPort}`);
 });
 

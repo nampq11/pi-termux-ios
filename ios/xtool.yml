@@ -1,0 +1,4 @@
+version: 1
+bundleID: org.pimobile.app
+infoPath: Info.plist
+iconPath: AppIcon.png

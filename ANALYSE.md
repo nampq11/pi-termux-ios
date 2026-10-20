@@ -287,3 +287,50 @@ Fernbedienung: wenn der pi-Server ohnehin in echter Termux-App läuft
     beilegen genügt; kein Copyleft-Effekt auf App-Code, solange keine
     GPL-Bibliothek gelinkt wird — termux-exec ist Apache-2.0, kein
     Problem).
+
+---
+
+## 9. iOS-Port mit xtool (umgesetzt)
+
+**Stand: 2026-10-20.** `ios/` enthält eine iOS-App, die mit xtool (xtool.sh)
+komplett unter Linux gebaut wird (Swift 6.4 + darwin-SDK aus Xcode.xip; kein
+Mac, kein Xcode, kein Simulator — echtes Gerät per USB). Architektur wie
+Weg B, aber mit einer plattformbedingten Änderung im Exec-Pfad:
+
+**[F]** iOS erlaubt Apps kein `exec()` externer Binaries — kein Termux-Rootfs,
+kein `node`-Kindprozess, kein bash/git/rg/ssh, kein PTY. Damit fällt alles
+Prozess-basierte aus Abschnitt 1 weg: Bash-Tool-Aufrufe schlagen pro Aufruf
+fehl, Terminal-/Clients-/Remote-Seiten und npm-Self-Update haben keine
+Funktion. Chat/Sessions/Accounts (Netzwerk + SQLite) laufen lokal.
+
+**[F]** Ersatz für den Exec-Pfad: nodejs-mobile **Node 24 LTS**
+(fogtape/nodejs-mobile v24.22.0-0; `NodeMobile.xcframework`, arm64 device +
+simulator; enthält `node:sqlite` für pi-durable, jitless V8 + polywasm).
+`scripts/prepare-runtime-ios.py` lädt das Framework per SHA256-Pin und
+packt die JS-Runtime als STORED-zip; SwiftPM `.binaryTarget` linkt es, xtool
+bettet es unter `Frameworks/` in die App ein. `server.mjs` läuft In-Process
+auf einem eigenen Thread (8 MB Stack, argv in einem kontinuierlichen
+Speicherblock — libuv-Anforderung —, Einstieg `node_start`).
+
+**[F]** Funktionsnachweis auf Linux mit Nodes Permission-Modell
+(`node --permission` verweigert child_process; entspricht der iOS-Lage):
+Bridge bootet, schreibt port/token, bedient UI-/Session-/Key-Endpunkte,
+SQLite-Harness funktioniert. Neu für iOS (`PI_PLATFORM=ios`): kein
+`process.exit` im Boot-Fehlerpfad — stattdessen Schreiben von
+`$HOME/.pi-mobile/fatal` plus `uncaughtException`-Guard; die Swift-Shell
+zeigt den Fehler und verlangt App-Neustart.
+
+Baustein-Abbildung wie Android: `MainActivity` → `BridgeWebView` (WKWebView,
+ATS-Loopback-Ausnahme für 127.0.0.1/localhost in `Info.plist` — iOS 17+
+blockiert sonst cleartext-HTTP an IP-Adressen), `PiService` → `NodeEngine`,
+`RuntimeInstaller` → `RuntimeInstaller` (STORED-zip statt tar.gz, weil Apples
+Compression-Framework kein Raw-Deflate hat und ZIPFoundation unter xtool das
+Linux-libz linkt). Kein Supervisor/Restart (nodejs-mobile: genau eine
+Engine-Instanz pro Prozess, nicht neu startbar) → Engine-Absturz erfordert
+App-Neustart. Kein Hintergrundbetrieb (App-Suspend friert die Engine ein);
+free Apple ID → 7-Tage-Installate, Erneuerung per `xtool dev`.
+
+**[A]** Offen: Test auf echtem Gerät (USB, `xtool dev`), polywasm-Verhalten
+mit dem WASM-Anteil des pi-Bundles (Bild-Resize), OAuth-Browser-Flow mit
+Loopback-Callback in der WKWebView, Verhalten bei App-Suspend während eines
+laufenden Prompts.

@@ -13,6 +13,8 @@ pi-coding-agent 1.0.2 bundled for the CLI + TUI) behind a tiny
 HTTP/SSE/WebSocket bridge (`runtime/server.mjs`). UI is a local WebView on
 `http://127.0.0.1:<port>` (ephemeral port → `files/home/.pi-mobile/port`,
 token → `…/token`).
+An iOS sibling app under `ios/` runs the same bridge with an in-process Node
+engine — see [iOS app (xtool)](#ios-app-xtool).
 
 The durable harness gives: SQLite-backed conversations
 (`files/home/.pi-mobile/harness.sqlite` — survive process death,
@@ -315,6 +317,59 @@ files are present — bad-symlink warnings are only logged.)
 adb install android/app/build/outputs/apk/debug/app-debug.apk
 # or wireless: ./install-wifi.sh (pairs via mDNS, installs, starts)
 ```
+## iOS app (xtool)
+
+The same bridge-and-WebView architecture exists as an iOS app under `ios/`,
+built entirely on Linux/WSL with [xtool](https://xtool.sh) — no Mac, no Xcode.
+One fundamental difference: iOS never allows apps to `exec()` external
+binaries, so there is no Termux rootfs and no `node` child process. Instead a
+Node engine is linked into the app — nodejs-mobile **Node 24 LTS**
+(`NodeMobile.xcframework`, fetched and SHA256-pinned by
+`scripts/prepare-runtime-ios.py`; includes `node:sqlite` for pi-durable) — and
+`server.mjs` runs in-process on a dedicated thread via `node_start`.
+
+The Swift shell mirrors the Android app piece by piece:
+
+| Android | iOS |
+|---|---|
+| `MainActivity` (WebView, poll port/token, external links → browser) | `BridgeWebView` (WKWebView, same handshake, ATS loopback exception in `Info.plist`) |
+| `PiService` (foreground service, spawn `node server.mjs`, supervisor restart) | `NodeEngine` (dedicated 8 MB thread, `node_start`; no supervisor — see limits below) |
+| `RuntimeInstaller` (extract tar assets, version stamp) | `RuntimeInstaller` (extract STORED zip payload + stamp; `RuntimeArchive` is a tiny dependency-free unzip) |
+| Termux rootfs (`rootfs.bin`) | — (nothing is exec'd; the engine is a framework) |
+
+```bash
+# once: xtool setup (Swift 6.4 toolchain, Xcode.xip → darwin SDK, Apple ID)
+python3 scripts/prepare-runtime-ios.py   # runtime payload zip + pinned NodeMobile engine
+cd ios && xtool dev                      # build, sign, install to a USB iPhone
+```
+
+The payload zip is STORED (uncompressed) on purpose: Apple's Compression
+framework has no raw-DEFLATE mode, so `RuntimeArchive` only copies bytes.
+Changed payload fingerprints re-extract on the next launch; `home/` and
+`work/` are preserved, like on Android.
+
+**Honest limitations of the iOS sandbox:**
+
+- **Works locally:** chat with models over durable SQLite sessions, session
+  management, accounts (API keys + OAuth via the system browser), the web UI.
+- **Cannot work without processes:** bash tool calls, ripgrep, git, the
+  terminal page (PTY), SSH clients/tunnels and the npm self-update rely on
+  child processes — spawns are denied per call on iOS and the affected pages
+  surface those errors.
+- **Engine cannot restart:** nodejs-mobile allows one engine instance per
+  process, so a crashed engine needs an app relaunch. With `PI_PLATFORM=ios`
+  the bridge never calls `process.exit` (that would kill the app); boot
+  failures are written to `$HOME/.pi-mobile/fatal` and shown by the shell.
+  An iOS-only `uncaughtException` guard does the same for early crashes.
+- **No background execution:** iOS suspends the app (and with it the engine)
+  in the background; there is no foreground-service equivalent.
+- Free-Apple-ID installs expire after 7 days; rerun `xtool dev` to renew.
+
+Build prerequisites: Python 3 + curl for the payload script, xtool with the
+darwin SDK, a USB-connected iPhone (no simulator on Linux). Refreshing
+pi-spaces from source follows the same rules as the Android build
+(`PI_SPACES_SOURCE`).
+
 
 First launch extracts ~170 MB to app-private storage, then a foreground
 service starts `node runtime/server.mjs`. The service runs exactly one bridge:

@@ -22,3 +22,17 @@ Thumbs.db
 # Logs and temp files
 *.log
 *.tmp
+
+# iOS / xtool build artifacts (engine framework and payload are fetched/built
+# by scripts/prepare-runtime-ios.py; xtool/ is the assembled .app output)
+/ios/Frameworks/
+/ios/Sources/PiMobile/Resources/runtime.zip
+/ios/Sources/PiMobile/Resources/payload.sha256
+/ios/.build/
+/ios/xtool/
+/ios/.bsp/
+/ios/.sourcekit-lsp/
+
+# Python bytecode / agent session data
+__pycache__/
+/.pi/
