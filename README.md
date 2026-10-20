@@ -348,6 +348,14 @@ framework has no raw-DEFLATE mode, so `RuntimeArchive` only copies bytes.
 Changed payload fingerprints re-extract on the next launch; `home/` and
 `work/` are preserved, like on Android.
 
+Unlike Android's ephemeral port, the iOS bridge listens on a fixed loopback
+port (`41943`) so it can be reached from the host over USB for debugging:
+`iproxy 41943:41943` (or any usbmux TCP forwarder), then
+`curl http://127.0.0.1:41943/`. The port/token handshake files are unchanged.
+With `PI_PLATFORM=ios` the server also injects `window.PI_MOBILE_IOS=1` into
+HTML pages; `menu.js` then hides Remote/CLI/Clients (they need child
+processes). Android rendering is byte-identical.
+
 **Honest limitations of the iOS sandbox:**
 
 - **Works locally:** chat with models over durable SQLite sessions, session
