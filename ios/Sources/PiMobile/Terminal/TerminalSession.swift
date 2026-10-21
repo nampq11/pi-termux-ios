@@ -62,6 +62,11 @@ public final class TerminalSession {
     public func disconnect() {
         ws?.cancel(with: .normalClosure, reason: nil)
         ws = nil
+        // Back to a connectable state: reconnect() runs disconnect→connect in
+        // one turn, and connect()'s guard would otherwise reject it while the
+        // stale .open/.connecting state is still set. The cancelled task's
+        // pending callbacks all no-op on the `ws === task` guard.
+        state = .idle
     }
 
     /// Clears the screen for a fresh session (the web's term.reset()).
