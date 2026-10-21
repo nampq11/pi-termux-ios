@@ -22,7 +22,7 @@ FILES = ['server.mjs', 'bridge/http.mjs', 'bridge/sse.mjs', 'bridge/pty.mjs',
          'pi-serverd.mjs', 'serverd-tcp.mjs', 'space-keys.mjs', 'spaces-mobile.mjs',
          'remote-client.mjs', 'remote-provision.mjs', 'remote-state.mjs', 'ssh-transport.mjs',
          'ustar.mjs',
-         'ssh-js-backend.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json', 'public',
+         'ssh-js-backend.mjs', 'ssh-copy-id.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json', 'public',
          'node_modules']
 
 # Static relative imports (`from './x.mjs'`, `import './x.mjs'`); dynamic

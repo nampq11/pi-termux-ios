@@ -1,5 +1,5 @@
 import { authUrl, getJson, initApi, postJson } from './api.js';
-import { askCopyAuth, askInstallKey, askTrustHost, askUpdate } from './authprompt.js';
+import { askCopyAuth, askInstallKey, askTrustHost, askUpdate, installKeyWithPassword } from './authprompt.js';
 import { wireComposer } from './composer.js';
 import { API } from './constants.js';
 import { renderMenu } from './menu.js';
@@ -212,11 +212,16 @@ async function connectHost() {
       }
     } finally { clearInterval(logTimer); }
     if (generation !== connectGeneration) return;
-    if (r.loginFailed && await askInstallKey(target)) {
-      // ssh-copy-id needs a terminal for the password; the terminal page returns here afterwards
-      const back = authUrl('/remote.html', { host: target });
-      location.href = authUrl('/terminal.html', { ssh: target, sshop: 'copyid', next: back });
-      return;
+    if (r.loginFailed) {
+      // iOS has no PTY for interactive ssh-copy-id; the bridge installs the key with the password instead
+      if (window.PI_MOBILE_IOS === 1) {
+        if (await installKeyWithPassword(target)) r = await postJson(API.remoteConnect, { target });
+      } else if (await askInstallKey(target)) {
+        // ssh-copy-id needs a terminal for the password; the terminal page returns here afterwards
+        const back = authUrl('/remote.html', { host: target });
+        location.href = authUrl('/terminal.html', { ssh: target, sshop: 'copyid', next: back });
+        return;
+      }
     }
     if (!r.ok) { transcript.sys(`error: ${r.error}`); return; }
     setConnected(true);

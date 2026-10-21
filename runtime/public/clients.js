@@ -1,4 +1,5 @@
 import { authUrl, getJson, initApi, postJson } from './api.js';
+import { installKeyWithPassword } from './authprompt.js';
 import { API } from './constants.js';
 import { renderMenu } from './menu.js';
 
@@ -58,7 +59,9 @@ async function load() {
     copy.textContent = '⇧key';
     copy.title = 'copy ssh key (ssh-copy-id)';
     copy.addEventListener('click', () => {
-      location.href = authUrl('/terminal.html', { ssh: c.target, sshop: 'copyid' });
+      // iOS has no PTY for the interactive binary; the bridge installs the key with the password
+      if (window.PI_MOBILE_IOS === 1) installKeyWithPassword(c.target);
+      else location.href = authUrl('/terminal.html', { ssh: c.target, sshop: 'copyid' });
     });
 
     const del = document.createElement('button');
@@ -89,7 +92,8 @@ document.getElementById('add-form').addEventListener('submit', async (e) => {
   // auto-flow: ensure key exists, then offer interactive ssh-copy-id
   const k = await getJson(API.sshkey);
   if (!k.exists) await postJson(API.sshkey, {});
-  location.href = authUrl('/terminal.html', { ssh: target, sshop: 'copyid' });
+  if (window.PI_MOBILE_IOS === 1) await installKeyWithPassword(target);
+  else location.href = authUrl('/terminal.html', { ssh: target, sshop: 'copyid' });
 });
 
 loadKey();

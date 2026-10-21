@@ -69,10 +69,9 @@ function parseTarget(host) {
   return { username: user, hostname: at >= 0 ? host.slice(at + 1) : host };
 }
 
-function connect({ host, port, home, signal }) {
+function connect({ host, port, home, signal, password }) {
   const { username, hostname } = parseTarget(host);
   const keyPath = path.join(home, '.ssh', 'id_ed25519');
-  const privateKey = readFileSync(keyPath, 'utf8');
   const pattern = knownHostsPattern(host, port);
   return new Promise((resolve, reject) => {
     const conn = new Client();
@@ -83,7 +82,11 @@ function connect({ host, port, home, signal }) {
       host: hostname,
       port: port || 22,
       username,
-      privateKey,
+      // password auth serves the key-install flow (ssh-copy-id.mjs): the host
+      // does not accept the device key yet, so it may not even exist here
+      ...(password === undefined
+        ? { privateKey: readFileSync(keyPath, 'utf8') }
+        : { password }),
       keepalive: { interval: 15, countMax: 3 },
       readyTimeout: 15_000,
       // accept-new: unknown host → store and accept; known-but-different → refuse
@@ -106,8 +109,9 @@ export const jsSshBackend = {
 
   /** Same process semantics as the spawn backend: bounded, tail-trimmed
    * output, line callbacks, and stdin write failures must not crash the
-   * caller with an unhandled event. */
-  run({ home, host, port, command, stdin, onLine, timeoutMs = 60_000, signal }) {
+   * caller with an unhandled event. `password` is a JS-backend-only extension
+   * (no spawn equivalent) used by the key-install flow. */
+  run({ home, host, port, command, stdin, onLine, timeoutMs = 60_000, signal, password }) {
     return withDeadline((bounded) => new Promise((resolve, reject) => {
       let conn;
       const capture = sshOutputCapture(onLine);
@@ -121,7 +125,7 @@ export const jsSshBackend = {
       };
       const onAbort = () => finish(bounded.reason);
       bounded.addEventListener('abort', onAbort, { once: true });
-      connect({ host, port, home, signal: bounded })
+      connect({ host, port, home, signal: bounded, password })
         .then((c) => {
           if (done) { c.end(); return; }
           conn = c;

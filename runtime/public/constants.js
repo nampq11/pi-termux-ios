@@ -25,6 +25,7 @@ export const API = {
   model: '/api/model',
   clients: '/api/clients',
   sshkey: '/api/sshkey',
+  sshCopyId: '/api/ssh-copy-id',
   remoteConnect: '/api/remote/connect',
   remoteSessions: '/api/remote/sessions',
   remoteModels: '/api/remote/models',

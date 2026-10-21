@@ -29,7 +29,9 @@ export const PRELUDE = 'export PATH="$HOME/.local/bin:$HOME/.volta/bin:$HOME/.as
   + 'export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1; '
   + 'command -v node >/dev/null 2>&1 || { for d in "$HOME/.local/share/fnm" "$HOME/.fnm"; do [ -x "$d/fnm" ] && export PATH="$d:$PATH" && eval "$(fnm env 2>/dev/null)" && break; done; }; ';
 
-const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+// shared with ssh-copy-id.mjs: single-quote a value for safe embedding in an
+// sh command sent over SSH
+export const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 export const remoteBash = (script) => `bash -l -c "$(echo ${Buffer.from(PRELUDE + script).toString('base64')} | base64 -d)"`;
 export function runtimeHash(root = ROOT, files = remoteFiles(root)) {
   const h = createHash('sha256');
