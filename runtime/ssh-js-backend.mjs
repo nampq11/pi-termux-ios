@@ -129,6 +129,9 @@ export const jsSshBackend = {
         .then((c) => {
           if (done) { c.end(); return; }
           conn = c;
+          // post-ready failures (network drop, keepalive timeout) must resolve
+          // the run instead of crashing on an unhandled 'error' event
+          conn.on('error', (e) => finish(e));
           conn.exec(command, (execErr, stream) => {
             if (execErr) return finish(execErr);
             stream.on('data', capture.stdout);
@@ -149,6 +152,30 @@ export const jsSshBackend = {
   },
 
   runStrict: sshRunStrict,
+
+  /** Interactive remote command on a pty (the terminal's ssh path): iOS
+   * cannot spawn `script`, so the pty is the SSH channel itself — exec with a
+   * pty-req, the wire equivalent of `ssh -tt host command`. The handle owns
+   * its connection: kill() tears it down, and the stream emits 'close' when
+   * the remote side (or the connection) ends. */
+  openShell({ home, host, port, command, cols, rows }) {
+    return new Promise((resolve, reject) => {
+      connect({ host, port, home })
+        .then((conn) => {
+          conn.exec(command, { pty: { term: 'xterm-256color', cols, rows } }, (err, stream) => {
+            if (err) { try { conn.end(); } catch {} reject(err); return; }
+            // a dropped connection must end the channel, not just the socket
+            conn.on('close', () => { try { stream.close(); } catch {} });
+            conn.on('error', () => {}); // surfaced through 'close' above
+            resolve({
+              stream,
+              kill: () => { try { conn.end(); } catch {} },
+            });
+          });
+        })
+        .catch(reject);
+    });
+  },
 
   /** SHA256:… host-key fingerprint from the known_hosts file, or null. */
   async fingerprint({ home, host, port }) {
@@ -198,7 +225,10 @@ export const jsSshBackend = {
     ready.catch(die);
     // the no-op catch: a handshake losing the race with kill() must not
     // surface as an unhandled rejection — die() already reported the exit
-    ready.then((c) => c.on('close', () => die(new Error('ssh connection closed')))).catch(() => {});
+    ready.then((c) => {
+      c.on('error', die); // an unhandled Client 'error' event would crash the bridge
+      c.on('close', () => die(new Error('ssh connection closed')));
+    }).catch(() => {});
     server = net.createServer((socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));

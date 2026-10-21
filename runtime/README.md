@@ -20,7 +20,8 @@ internals.
 ## Layers (server.mjs is the composition root)
 
 - `bridge/` — HTTP plumbing: `http.mjs` (MIME, body, token auth, static),
-  `sse.mjs` (event hub), `pty.mjs` (terminal), `routes/` (system, sessions,
+  `sse.mjs` (event hub), `pty.mjs` (terminal; on JS backends the SSH channel
+  itself is the pty for remote sessions), `routes/` (system, sessions,
   ssh, remote, accounts). Each route module is a factory taking the shared
   deps object; `server.mjs` dispatches to them in order (spaces before the
   readiness gate, accounts after it).
