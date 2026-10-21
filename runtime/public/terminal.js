@@ -1,8 +1,10 @@
 /* global Terminal, FitAddon */
+import { initApi, postJson } from './api.js';
 import { askCopyAuth, askInstallKey, askTrustHost } from './authprompt.js';
 import { API } from './constants.js';
 import { renderMenu } from './menu.js';
 const token = renderMenu();
+initApi(token);
 
 const term = new Terminal({
   fontFamily: 'monospace',
@@ -80,9 +82,8 @@ setTimeout(sendSize, 1500); // push real size once the ws is up
 async function start() {
   if (sshTarget && !sshOp) {
     try {
-      const post = (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-token': token }, body: JSON.stringify(body) }).then((r) => r.json());
       term.write(`checking ${sshTarget}…\r\n`);
-      const st = await post(API.remoteAuthStatus, { target: sshTarget });
+      const st = await postJson(API.remoteAuthStatus, { target: sshTarget });
       if (st.loginFailed) {
         if (await askInstallKey(sshTarget)) { keyInstallRun = true; connect('copyid'); return; }
         term.write('key not installed; ssh will ask for the password.\r\n');
@@ -90,12 +91,12 @@ async function start() {
       else if (st.needsAuth) {
         let trusted = st.trusted;
         if (!trusted && await askTrustHost(sshTarget, st.fingerprint)) {
-          const r = await post(API.remoteTrustHost, { target: sshTarget, fingerprint: st.fingerprint });
+          const r = await postJson(API.remoteTrustHost, { target: sshTarget, fingerprint: st.fingerprint });
           trusted = r.ok;
           if (!trusted) term.write(`[fingerprint confirmation failed: ${r.error}]\r\n`);
         }
         if (trusted && await askCopyAuth(sshTarget)) {
-          const r = await post(API.remoteCopyAuth, { target: sshTarget });
+          const r = await postJson(API.remoteCopyAuth, { target: sshTarget });
           term.write(r.ok ? 'auth.json copied.\r\n' : `[copy failed: ${r.error}]\r\n`);
         }
       }

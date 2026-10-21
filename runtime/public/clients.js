@@ -1,8 +1,8 @@
+import { authUrl, getJson, initApi, postJson } from './api.js';
 import { API } from './constants.js';
 import { renderMenu } from './menu.js';
 
-const token = renderMenu();
-const q = (p) => `${p}?token=${encodeURIComponent(token)}`;
+initApi(renderMenu());
 const list = document.getElementById('client-list');
 const msg = document.getElementById('msg');
 const addForm = document.getElementById('add-form');
@@ -10,17 +10,10 @@ document.getElementById('add-toggle')?.addEventListener('click', () => {
   addForm.classList.toggle('hidden');
 });
 
-const post = (path, body) => fetch(path, {
-  method: 'POST',
-  headers: { 'content-type': 'application/json', 'x-token': token },
-  body: JSON.stringify(body),
-});
-
 // --- ssh key ----------------------------------------------------------------
 
 async function loadKey() {
-  const r = await fetch(`${API.sshkey}?token=${encodeURIComponent(token)}`);
-  const j = await r.json().catch(() => ({}));
+  const j = await getJson(API.sshkey);
   document.getElementById('sshkey-status').textContent = j.exists
     ? 'key exists (ed25519)'
     : 'no key yet';
@@ -30,16 +23,15 @@ async function loadKey() {
 }
 document.getElementById('sshkey-gen').addEventListener('click', async () => {
   msg.textContent = 'generating…';
-  const r = await post(API.sshkey, {});
-  msg.textContent = r.ok ? 'key generated' : 'error generating key';
+  const j = await postJson(API.sshkey, {});
+  msg.textContent = j.ok ? 'key generated' : 'error generating key';
   loadKey();
 });
 
 // --- hosts -------------------------------------------------------------------
 
 async function load() {
-  const r = await fetch(`${API.clients}?token=${encodeURIComponent(token)}`);
-  const j = await r.json().catch(() => ({ clients: [] }));
+  const j = await getJson(API.clients);
   list.innerHTML = '';
   if (!j.clients?.length) {
     list.innerHTML = '<div class="key-empty">no hosts yet — add one below</div>';
@@ -59,21 +51,21 @@ async function load() {
     go.textContent = '▸_';
     go.title = 'connect (pi cli)';
     go.addEventListener('click', () => {
-      location.href = `/terminal.html?token=${encodeURIComponent(token)}&ssh=${encodeURIComponent(c.target)}`;
+      location.href = authUrl('/terminal.html', { ssh: c.target });
     });
 
     const copy = document.createElement('button');
     copy.textContent = '⇧key';
     copy.title = 'copy ssh key (ssh-copy-id)';
     copy.addEventListener('click', () => {
-      location.href = `/terminal.html?token=${encodeURIComponent(token)}&ssh=${encodeURIComponent(c.target)}&sshop=copyid`;
+      location.href = authUrl('/terminal.html', { ssh: c.target, sshop: 'copyid' });
     });
 
     const del = document.createElement('button');
     del.textContent = '✕';
     del.className = 'key-del';
     del.addEventListener('click', async () => {
-      await post(API.clients, { delete: c.name });
+      await postJson(API.clients, { delete: c.name });
       load();
     });
 
@@ -87,18 +79,17 @@ document.getElementById('add-form').addEventListener('submit', async (e) => {
   const name = document.getElementById('add-name').value.trim();
   const target = document.getElementById('add-target').value.trim();
   if (!target) return;
-  const r = await post(API.clients, { name, target });
-  const j = await r.json().catch(() => ({}));
-  if (!j.ok) { msg.textContent = `error: ${j.error || r.status}`; return; }
+  const j = await postJson(API.clients, { name, target });
+  if (!j.ok) { msg.textContent = `error: ${j.error}`; return; }
   msg.textContent = 'added';
   document.getElementById('add-name').value = '';
   document.getElementById('add-target').value = '';
   load();
   addForm.classList.add('hidden');
   // auto-flow: ensure key exists, then offer interactive ssh-copy-id
-  const k = await fetch(`${API.sshkey}?token=${encodeURIComponent(token)}`).then((x) => x.json());
-  if (!k.exists) await post(API.sshkey, {});
-  location.href = `/terminal.html?token=${encodeURIComponent(token)}&ssh=${encodeURIComponent(target)}&sshop=copyid`;
+  const k = await getJson(API.sshkey);
+  if (!k.exists) await postJson(API.sshkey, {});
+  location.href = authUrl('/terminal.html', { ssh: target, sshop: 'copyid' });
 });
 
 loadKey();

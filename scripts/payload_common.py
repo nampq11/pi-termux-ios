@@ -63,6 +63,15 @@ def check_import_closures():
         raise SystemExit(f'pi-serverd.mjs imports files missing from REMOTE_FILES in remote-provision.mjs: {sorted(missing)}')
     if import_closure('env-server.mjs'):
         raise SystemExit('env-server.mjs must stay dependency-free (no relative imports)')
+    # The pages import each other (api.js, menu.js, …) and ship only as part of
+    # the public/ directory; a broken specifier there crashes the WebView just
+    # like a missing runtime module crashes the server.
+    for page in sorted((RUNTIME / 'public').glob('*.js')):
+        for match in _RELATIVE_IMPORT_RE.findall(page.read_text()):
+            spec = match[0] or match[1]
+            target = posixpath.normpath(posixpath.join('public', spec))
+            if not (RUNTIME / target).is_file():
+                raise SystemExit(f'public/{page.name} imports missing file: {spec}')
 
 
 def refresh_pi_spaces_bundle():

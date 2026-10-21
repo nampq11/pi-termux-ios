@@ -1,9 +1,11 @@
+import { authUrl, getJson, initApi, postJson } from './api.js';
 import { API } from './constants.js';
 import { askCopyAuth, askInstallKey, askTrustHost, askUpdate } from './authprompt.js';
 import { renderMenu } from './menu.js';
-import { newRequestId, postJson, Transcript, usageText } from './transcript.js';
+import { newRequestId, Transcript, usageText } from './transcript.js';
 
 const token = renderMenu();
+initApi(token);
 const hostSel = document.getElementById('host-select');
 const sessSel    = document.getElementById('session-select');
 const modelSel   = document.getElementById('model-select');
@@ -23,13 +25,6 @@ const statusEl   = document.getElementById('remote-status');
 const usageEl = document.getElementById('session-usage');
 const steerWrap = document.getElementById('steer-wrap');
 const steerBox = document.getElementById('steer');
-
-const q = (path, params = {}) => {
-  const u = new URLSearchParams({ token, ...params });
-  return `${path}?${u}`;
-};
-const getJson = (path, params) => fetch(q(path, params)).then((r) => r.json()).catch((e) => ({ error: String(e?.message || e) }));
-const post = (path, body, opts) => postJson(path, token, body, opts);
 
 let busy = false;
 const transcript = new Transcript(chat, {
@@ -128,7 +123,7 @@ async function loadRemoteModels() {
 
 async function attachSession(id) {
   pollGeneration++;
-  const r = await post(API.remoteAttach, { id }, { retries: 2 });
+  const r = await postJson(API.remoteAttach, { id }, { retries: 2 });
   if (!r.ok) { transcript.sys(`error: ${r.error || 'could not attach'}`); return; }
   attachedId = id;
   link = 'connected';
@@ -178,7 +173,7 @@ async function disconnectHost() {
   connectGeneration++;
   connecting = false;
   resetUi();
-  const r = await post(API.remoteDisconnect, {});
+  const r = await postJson(API.remoteDisconnect, {});
   transcript.sys(r.error ? `error: ${r.error}` : 'disconnected');
 }
 
@@ -205,10 +200,10 @@ async function connectHost() {
       // the bridge answers needsAuth / needsUpdate until the user decided; each answer is sent along
       const body = { target };
       for (let i = 0; i < 4; i++) {
-        r = await post(API.remoteConnect, body);
+        r = await postJson(API.remoteConnect, body);
         if (r.needsTrust) {
           if (await askTrustHost(target, r.fingerprint)) {
-            const trust = await post(API.remoteTrustHost, { target, fingerprint: r.fingerprint });
+            const trust = await postJson(API.remoteTrustHost, { target, fingerprint: r.fingerprint });
             if (!trust.ok) { r = trust; break; }
           } else body.copyAuth = false;
         } else if (r.needsAuth) body.copyAuth = await askCopyAuth(target);
@@ -219,8 +214,8 @@ async function connectHost() {
     if (generation !== connectGeneration) return;
     if (r.loginFailed && await askInstallKey(target)) {
       // ssh-copy-id needs a terminal for the password; the terminal page returns here afterwards
-      const back = `/remote.html?token=${encodeURIComponent(token)}&host=${encodeURIComponent(target)}`;
-      location.href = `/terminal.html?token=${encodeURIComponent(token)}&ssh=${encodeURIComponent(target)}&sshop=copyid&next=${encodeURIComponent(back)}`;
+      const back = authUrl('/remote.html', { host: target });
+      location.href = authUrl('/terminal.html', { ssh: target, sshop: 'copyid', next: back });
       return;
     }
     if (!r.ok) { transcript.sys(`error: ${r.error}`); return; }
@@ -230,7 +225,7 @@ async function connectHost() {
     // A fresh host has no durable conversations yet. Create one immediately so
     // Remote always opens a session belonging to the newly selected host.
     if (!sessions.length) {
-      const created = await post(API.remoteCreate, {});
+      const created = await postJson(API.remoteCreate, {});
       if (!created.id) { transcript.sys(`error: ${created.error || 'could not create session'}`); return; }
       sessions = [{ id: created.id }];
     }
@@ -256,7 +251,7 @@ btnStop.addEventListener('click', async () => {
     connectGeneration++;
     resetUi();
     transcript.sys(`stopping server on ${target}…`);
-    const r = await post(API.remoteStop, { target });
+    const r = await postJson(API.remoteStop, { target });
     transcript.sys(r.error ? `error: ${r.error}` : r.stopped ? 'remote server stopped' : 'remote server was not running');
   } finally { btnStop.disabled = false; }
 });
@@ -269,7 +264,7 @@ sessSel.addEventListener('change', async () => {
 modelSel.addEventListener('change', async () => {
   try {
     const model = JSON.parse(modelSel.value);
-    const r = await post(API.remoteModel, model);
+    const r = await postJson(API.remoteModel, model);
     if (!r.ok) transcript.sys(`error: ${r.error || 'could not change model'}`);
   } catch { transcript.sys('error: invalid model selection'); }
 });
@@ -280,13 +275,13 @@ btnRename?.addEventListener('click', async () => {
   const cur = sessSel.options[sessSel.selectedIndex]?.textContent || id;
   const name = prompt('Rename session:', cur);
   if (name === null || name === cur) return;
-  const r = await post(API.remoteRename, { id, name });
+  const r = await postJson(API.remoteRename, { id, name });
   if (!r.ok) { transcript.sys(`error: ${r.error || 'rename failed'}`); return; }
   sessSel.options[sessSel.selectedIndex].textContent = name || id;
 });
 
 btnNew.addEventListener('click', async () => {
-  const r = await post(API.remoteCreate, {});
+  const r = await postJson(API.remoteCreate, {});
   if (!r.id) { transcript.sys(`error: ${r.error || 'could not create session'}`); return; }
   const o = document.createElement('option');
   o.value = r.id;
@@ -299,7 +294,7 @@ btnNew.addEventListener('click', async () => {
 btnDelete.addEventListener('click', async () => {
   const id = sessSel.value;
   if (!id || !confirm(`Stop and remove remote session ${id}?`)) return;
-  const r = await post(API.remoteDelete, { id });
+  const r = await postJson(API.remoteDelete, { id });
   if (!r.ok) { transcript.sys(`error: ${r.error || 'could not remove session'}`); return; }
   pollGeneration++;
   attachedId = null;
@@ -310,11 +305,11 @@ btnDelete.addEventListener('click', async () => {
 });
 
 btnAbort.addEventListener('click', async () => {
-  const r = await post(API.remoteAbort, {});
+  const r = await postJson(API.remoteAbort, {});
   if (r.error) transcript.sys(`error: ${r.error}`);
 });
 btnCompact.addEventListener('click', async () => {
-  const r = await post(API.remoteCompact, {});
+  const r = await postJson(API.remoteCompact, {});
   if (r.error) transcript.sys(`error: ${r.error}`);
 });
 
@@ -328,7 +323,7 @@ composer.addEventListener('submit', async (e) => {
   // before the tunnel dropped is not run a second time
   const body = { message: text, requestId: newRequestId() };
   if (busy && steerBox.checked) body.whenBusy = 'steer';
-  const r = await post(API.remotePrompt, body, { retries: 10 });
+  const r = await postJson(API.remotePrompt, body, { retries: 10 });
   if (r.error) transcript.failPending(pending, r.error);
 });
 

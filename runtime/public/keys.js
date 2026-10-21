@@ -1,7 +1,8 @@
+import { getJson, initApi, postJson } from './api.js';
 import { API } from './constants.js';
 import { renderMenu } from './menu.js';
 
-const token = renderMenu();
+initApi(renderMenu());
 const list = document.getElementById('key-list');
 const msg = document.getElementById('msg');
 const oauthProvider = document.getElementById('oauth-provider');
@@ -43,8 +44,7 @@ function askOAuthPrompt(prompt) {
 }
 
 async function load() {
-  const r = await fetch(`${API.providers}?token=${encodeURIComponent(token)}`);
-  const j = await r.json().catch(() => ({ providers: [] }));
+  const j = await getJson(API.providers);
   list.innerHTML = '';
   if (!j.providers?.length) {
     list.innerHTML = '<div class="key-empty">no credentials saved</div>';
@@ -63,10 +63,7 @@ async function load() {
     del.textContent = '✕';
     del.className = 'key-del';
     del.addEventListener('click', async () => {
-      const r2 = await fetch(API.auth, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-token': token },
-        body: JSON.stringify({ provider: p.provider, delete: true }),
-      });
+      const r2 = await postJson(API.auth, { provider: p.provider, delete: true });
       msg.textContent = r2.ok ? `${p.provider} removed` : 'error';
       load();
     });
@@ -76,8 +73,7 @@ async function load() {
 }
 
 async function loadOAuthProviders() {
-  const data = await fetch(`${API.oauthProviders}?token=${encodeURIComponent(token)}`)
-    .then((r) => r.json()).catch(() => ({ providers: [] }));
+  const data = await getJson(API.oauthProviders);
   oauthProvider.innerHTML = '';
   for (const provider of data.providers ?? []) {
     const option = document.createElement('option');
@@ -91,14 +87,11 @@ async function loadOAuthProviders() {
 
 async function runOAuth(provider) {
   oauthStatus.textContent = 'starting sign-in…';
-  const started = await fetch(API.oauthStart, {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-token': token }, body: JSON.stringify({ provider }),
-  }).then((r) => r.json()).catch(() => ({}));
+  const started = await postJson(API.oauthStart, { provider });
   if (!started.id) { oauthStatus.textContent = `error: ${started.error || 'could not start sign-in'}`; return; }
   let answeredPrompt = null;
   const timer = setInterval(async () => {
-    const state = await fetch(`${API.oauthStatus}?token=${encodeURIComponent(token)}&id=${encodeURIComponent(started.id)}`)
-      .then((r) => r.json()).catch(() => ({}));
+    const state = await getJson(API.oauthStatus, { id: started.id });
     for (const event of state.events ?? []) {
       if (event.type === 'auth_url') {
         oauthStatus.innerHTML = '';
@@ -115,10 +108,7 @@ async function runOAuth(provider) {
     if (state.prompt && state.prompt.id !== answeredPrompt) {
       answeredPrompt = state.prompt.id;
       const value = await askOAuthPrompt(state.prompt);
-      await fetch(API.oauthRespond, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-token': token },
-        body: JSON.stringify({ id: started.id, promptId: state.prompt.id, value }),
-      });
+      await postJson(API.oauthRespond, { id: started.id, promptId: state.prompt.id, value });
     }
     if (state.done) {
       clearInterval(timer);
@@ -133,12 +123,8 @@ document.getElementById('add-form').addEventListener('submit', async (e) => {
   const provider = document.getElementById('add-provider').value;
   const key = document.getElementById('add-key').value.trim();
   if (!key) return;
-  const r = await fetch(API.auth, {
-    method: 'POST', headers: { 'content-type': 'application/json', 'x-token': token },
-    body: JSON.stringify({ provider, key }),
-  });
-  const j = await r.json().catch(() => ({}));
-  msg.textContent = j.ok ? `saved ${provider}` : `error: ${j.error || r.status}`;
+  const j = await postJson(API.auth, { provider, key });
+  msg.textContent = j.ok ? `saved ${provider}` : `error: ${j.error}`;
   if (j.ok) { document.getElementById('add-key').value = ''; load(); }
 });
 
@@ -157,30 +143,29 @@ const elLog       = document.getElementById('update-log');
 
 async function checkVersion() {
   elInstalled.textContent = 'checking…';
-  try {
-    const v = await fetch(`${API.piVersion}?token=${encodeURIComponent(token)}`).then(r => r.json());
-    elInstalled.textContent = v.installed ?? '?';
-    if (v.updateAvailable) {
-      elArrow.classList.remove('hidden');
-      elLatest.textContent = v.latest;
-      elLatest.classList.remove('hidden');
-      btnUpdate.classList.remove('hidden');
-      elOk.classList.add('hidden');
-    } else {
-      elArrow.classList.add('hidden');
-      elLatest.classList.add('hidden');
-      btnUpdate.classList.add('hidden');
-      elOk.classList.remove('hidden');
-    }
-  } catch { elInstalled.textContent = 'unavailable'; }
+  const v = await getJson(API.piVersion);
+  if (v.error) { elInstalled.textContent = 'unavailable'; return; }
+  elInstalled.textContent = v.installed ?? '?';
+  if (v.updateAvailable) {
+    elArrow.classList.remove('hidden');
+    elLatest.textContent = v.latest;
+    elLatest.classList.remove('hidden');
+    btnUpdate.classList.remove('hidden');
+    elOk.classList.add('hidden');
+  } else {
+    elArrow.classList.add('hidden');
+    elLatest.classList.add('hidden');
+    btnUpdate.classList.add('hidden');
+    elOk.classList.remove('hidden');
+  }
 }
 
 let pollTimer = null;
 function startPolling() {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
-    const s = await fetch(`${API.piUpdateStatus}?token=${encodeURIComponent(token)}`).then(r => r.json()).catch(() => null);
-    if (!s) return;
+    const s = await getJson(API.piUpdateStatus);
+    if (!s || s.error) return;
     if (s.log?.length) { elLog.textContent = s.log.join('\n'); elLog.scrollTop = elLog.scrollHeight; }
     if (s.done) {
       clearInterval(pollTimer); pollTimer = null;
@@ -203,13 +188,13 @@ function startPolling() {
 btnUpdate?.addEventListener('click', async () => {
   btnUpdate.textContent = 'updating…'; btnUpdate.disabled = true;
   elLog.textContent = ''; elLog.classList.remove('hidden');
-  await fetch(API.piUpdate, { method: 'POST', headers: { 'x-token': token } });
+  await postJson(API.piUpdate);
   startPolling();
 });
 
 // auto-resume polling if an update is already running (page reload during update)
 (async () => {
   await checkVersion();
-  const s = await fetch(`${API.piUpdateStatus}?token=${encodeURIComponent(token)}`).then(r => r.json()).catch(() => null);
-  if (s?.running) { elLog.classList.remove('hidden'); btnUpdate.textContent = 'updating…'; btnUpdate.disabled = true; startPolling(); }
+  const s = await getJson(API.piUpdateStatus);
+  if (s.running) { elLog.classList.remove('hidden'); btnUpdate.textContent = 'updating…'; btnUpdate.disabled = true; startPolling(); }
 })();

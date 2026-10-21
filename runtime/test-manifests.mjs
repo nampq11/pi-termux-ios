@@ -5,7 +5,7 @@
 // (check_import_closures in scripts/payload_common.py).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REMOTE_FILES } from './remote-provision.mjs';
@@ -53,4 +53,17 @@ test('pi-serverd.mjs import closure is covered by the remote manifest', () => {
 
 test('env-server.mjs stays dependency-free', () => {
   assert.deepEqual([...importClosure('env-server.mjs')], []);
+});
+
+test('public pages only import files that ship beside them', () => {
+  const pages = readdirSync(path.join(ROOT, 'public')).filter((f) => f.endsWith('.js'));
+  assert.ok(pages.length > 0, 'no page scripts found in public/');
+  for (const page of pages) {
+    const text = readFileSync(path.join(ROOT, 'public', page), 'utf8');
+    for (const m of text.matchAll(RELATIVE_IMPORT)) {
+      const spec = m[1] || m[2];
+      const target = path.posix.normalize(path.posix.join('public', spec));
+      assert.ok(existsSync(path.join(ROOT, target)), `${page} imports missing file: ${spec}`);
+    }
+  }
 });
