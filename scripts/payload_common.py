@@ -3,6 +3,7 @@
 import hashlib
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -15,6 +16,48 @@ FILES = ['server.mjs', 'common.mjs', 'remote-env.mjs', 'env-server.mjs', 'pi-ser
          'serverd-tcp.mjs', 'space-keystore.mjs', 'spaces-mobile.mjs', 'remote-client.mjs',
          'remote-provision.mjs', 'remote-state.mjs', 'ssh-transport.mjs', 'ssh-js-backend.mjs',
          'pi-spaces.mjs', 'package.json', 'package-lock.json', 'public', 'node_modules']
+
+# Static relative imports (`from './x.mjs'`, `import './x.mjs'`); dynamic
+# import() and bare specifiers (node_modules) are out of scope by design.
+_RELATIVE_IMPORT_RE = re.compile(r"""\bfrom\s+['"](\.[^'"]+)['"]|\bimport\s+['"](\.[^'"]+)['"]""")
+_REMOTE_FILES_RE = re.compile(r'export const REMOTE_FILES = \[([^\]]*)\]', re.S)
+
+
+def import_closure(entry):
+    """Transitive static relative imports of a runtime entry file (names relative to runtime/)."""
+    seen, stack = set(), [entry]
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            text = (RUNTIME / name).read_text()
+        except FileNotFoundError:
+            continue  # reported as missing by the manifest set difference
+        for match in _RELATIVE_IMPORT_RE.findall(text):
+            spec = match[0] or match[1]
+            stack.append(spec[2:])  # strip the leading './'
+    seen.discard(entry)
+    return seen
+
+
+def check_import_closures():
+    """An entry importing an unmanifested file ships a runtime that crashes on
+    the device (and on remote hosts); fail the build instead. The same check
+    runs on npm test (runtime/test-manifests.mjs) for the inner loop."""
+    missing = import_closure('server.mjs') - set(FILES)
+    if missing:
+        raise SystemExit(f'server.mjs imports files missing from FILES in payload_common.py: {sorted(missing)}')
+    match = _REMOTE_FILES_RE.search((RUNTIME / 'remote-provision.mjs').read_text())
+    if not match:
+        raise SystemExit('cannot parse REMOTE_FILES from runtime/remote-provision.mjs')
+    remote_files = set(re.findall(r"'([^']+)'", match.group(1)))
+    missing = import_closure('pi-serverd.mjs') - remote_files
+    if missing:
+        raise SystemExit(f'pi-serverd.mjs imports files missing from REMOTE_FILES in remote-provision.mjs: {sorted(missing)}')
+    if import_closure('env-server.mjs'):
+        raise SystemExit('env-server.mjs must stay dependency-free (no relative imports)')
 
 
 def refresh_pi_spaces_bundle():
@@ -35,6 +78,7 @@ def check_runtime_inputs():
     """Verify the payload inputs exist before packaging."""
     if not (RUNTIME / 'node_modules/@earendil-works/pi-durable').is_dir():
         raise SystemExit('Mobile runtime dependencies missing; install the locked runtime dependencies first')
+    check_import_closures()
     for name in FILES:
         if name not in ('pi-spaces.mjs', 'space-examples') and not (RUNTIME / name).exists():
             raise SystemExit(f'Required runtime input missing: {name}')
