@@ -42,7 +42,10 @@ const REMOTE_PI_CMD = `'${remoteBash(REMOTE_PI_SCRIPT)}'`;
  * control frames become setWindow resizes, everything else is stdin. */
 async function startSshChannelPty(ws, { target, command, cols, rows }) {
   let handle = null;
-  ws.on('close', () => handle?.kill()); // covers a close during the handshake too
+  let wsClosed = false;
+  // covers a close during the handshake too: handle is still null then, so the
+  // flag lets the just-resolved openShell kill itself below
+  ws.on('close', () => { wsClosed = true; handle?.kill(); });
   const queued = [];
   const collect = (d) => queued.push(d);
   ws.on('message', collect);
@@ -56,6 +59,7 @@ async function startSshChannelPty(ws, { target, command, cols, rows }) {
       rows,
     });
     ws.removeListener('message', collect);
+    if (wsClosed) { handle.kill(); return; } // no consumer will ever read the stream
     const { stream } = handle;
     stream.on('data', (d) => { if (ws.readyState === 1) ws.send(d); });
     stream.stderr.on('data', (d) => { if (ws.readyState === 1) ws.send(d); });

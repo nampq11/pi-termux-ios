@@ -22,8 +22,10 @@ const { Server } = SSH2;
 async function startHost({ runReceived }) {
   const hostKeyDir = mkdtempSync(join(tmpdir(), 'shell-hostkey-'));
   assert.equal(await jsSshBackend.generateKey({ dir: hostKeyDir, comment: 'test host key' }), 0);
-  const seen = { command: null, windows: [] };
+  const seen = { command: null, windows: [], clients: 0, clientCloses: 0 };
   const server = new Server({ hostKeys: [readFileSync(join(hostKeyDir, 'id_ed25519'), 'utf8')] }, (client) => {
+    seen.clients += 1;
+    client.on('close', () => { seen.clientCloses += 1; });
     client.on('error', () => {});
     client.on('authentication', (ctx) => ctx.accept());
     client.on('session', (accept) => {
@@ -128,6 +130,26 @@ test('the pty handler bridges the WebSocket to the SSH channel on JS backends', 
   } finally {
     if (ws.readyState === 1) ws.close(); // kill the ssh connection even when an assert threw
     host.server.close();
+    for (const d of [home, host.hostKeyDir]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('a WebSocket closing during the SSH handshake tears the connection down', async () => {
+  setSshBackend(jsSshBackend);
+  const home = await makeDeviceHome();
+  const host = await startHost({ runReceived: false });
+  process.env.HOME = home; // the handler resolves the device key via $HOME
+  const startPty = createPtyHandler({ root: process.cwd(), prefix: '', workDir: process.cwd() });
+  try {
+    const ws = fakeWs();
+    startPty(ws, new URL(`ws://x/pty?token=t&cols=80&rows=24&ssh=${encodeURIComponent(`user@127.0.0.1:${host.port}`)}`));
+    ws.close(); // same tick: lands while openShell is still connecting
+    await waitFor(() => host.seen.clients === 1, 'the connection to be made');
+    await waitFor(() => host.seen.clientCloses === 1, 'the abandoned connection to be torn down');
+  } finally {
+    // a leaked client would otherwise keep the sockets (and the process) alive
+    host.server.close();
+    host.server.closeAllConnections?.();
     for (const d of [home, host.hostKeyDir]) rmSync(d, { recursive: true, force: true });
   }
 });
