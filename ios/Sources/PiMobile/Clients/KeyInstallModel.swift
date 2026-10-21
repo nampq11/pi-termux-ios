@@ -23,6 +23,7 @@ public final class KeyInstallModel {
     public private(set) var installed = false
     private weak var api: BridgeAPI?
     private var attempts = 0
+    @ObservationIgnored private var onFinished: (@MainActor (Bool) -> Void)?
 
     public init() {}
 
@@ -30,7 +31,10 @@ public final class KeyInstallModel {
         self.api = api
     }
 
-    public func begin(target: String) {
+    /// `onFinished` reports whether the key was installed once the flow ends
+    /// (by success, failure, or the user cancelling); the remote connect loop
+    /// uses it to retry the connect after an install.
+    public func begin(target: String, onFinished: (@MainActor (Bool) -> Void)? = nil) {
         self.target = target
         phase = .confirm
         attempts = 0
@@ -39,6 +43,7 @@ public final class KeyInstallModel {
         notice = nil
         installed = false
         running = true
+        self.onFinished = onFinished
     }
 
     public func confirm() {
@@ -48,10 +53,22 @@ public final class KeyInstallModel {
     }
 
     public func cancel() {
+        finish(installed: false)
+    }
+
+    private func finish(installed: Bool) {
+        guard running else { return }
+        if installed {
+            self.installed = true
+            notice = "key installed on \(target ?? "")"
+        }
         target = nil
         phase = .idle
         passwordRejected = false
         running = false
+        let callback = onFinished
+        onFinished = nil
+        callback?(installed)
     }
 
     /// One password attempt: success closes the flow, a rejected password
@@ -62,9 +79,7 @@ public final class KeyInstallModel {
         do {
             let res: [String: Any] = try await api.post("/api/ssh-copy-id", body: ["target": target, "password": password])
             if res["ok"] as? Bool == true {
-                installed = true
-                notice = "key installed on \(target)"
-                cancel()
+                finish(installed: true)
                 return
             }
             let authFailed = res["authFailed"] as? Bool ?? false
@@ -74,11 +89,11 @@ public final class KeyInstallModel {
             }
             error = authFailed ? "password rejected" : (res["error"] as? String ?? "key installation failed")
             notice = "key not installed on \(target)"
-            cancel()
+            finish(installed: false)
         } catch {
             self.error = error.localizedDescription
             notice = "key not installed on \(target)"
-            cancel()
+            finish(installed: false)
         }
     }
 }

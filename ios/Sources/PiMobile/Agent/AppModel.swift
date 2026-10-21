@@ -32,6 +32,7 @@ public final class AppModel {
     public var agentAccounts: [AgentAccount] = []
     public var clients = ClientsModel()
     public var keyInstall = KeyInstallModel()
+    public var remote = RemoteModel()
 
     public var agentListShown = false
     public var agentAccountsShown = false
@@ -62,6 +63,8 @@ public final class AppModel {
         api.configure(url: url)
         clients.attach(api)
         keyInstall.attach(api)
+        remote.attach(api)
+        remote.attach(keyInstall)
         startEventStream()
         Task {
             await loadAgentAccounts()

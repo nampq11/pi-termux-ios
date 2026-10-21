@@ -43,12 +43,12 @@ public final class BridgeAPI {
         return comps.url
     }
 
-    public func request(path: String, method: String, body: [String: Any]? = nil) throws -> URLRequest {
+    public func request(path: String, method: String, body: [String: Any]? = nil, query: [URLQueryItem] = []) throws -> URLRequest {
         guard let baseURL else {
             throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Bridge not ready"])
         }
         var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-        comps?.queryItems = [URLQueryItem(name: "token", value: token)]
+        comps?.queryItems = query + [URLQueryItem(name: "token", value: token)]
         guard let url = comps?.url else {
             throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
         }
@@ -63,25 +63,53 @@ public final class BridgeAPI {
         return req
     }
 
-    public func get<T>(_ path: String) async throws -> T {
-        try await send(try request(path: path, method: "GET"))
+    public func get<T>(_ path: String, query: [URLQueryItem] = []) async throws -> T {
+        try await send(try request(path: path, method: "GET", query: query))
     }
 
     public func post<T>(_ path: String, body: [String: Any]) async throws -> T {
         try await send(try request(path: path, method: "POST", body: body))
     }
 
+    /// POST with the web client's retry semantics (api.js postJson): retries
+    /// 503 reconnecting responses and network failures with backoff. Safe for
+    /// calls that carry a requestId or are idempotent.
+    public func postWithRetry<T>(_ path: String, body: [String: Any], retries: Int) async throws -> T {
+        var attempt = 0
+        while true {
+            let req = try request(path: path, method: "POST", body: body)
+            do {
+                return try await send(req)
+            } catch let error as NSError {
+                guard attempt < retries else { throw error }
+                if error.domain == "Bridge" {
+                    // An HTTP error: retry only the tunnel's 503 reconnecting.
+                    let reconnecting = (error.userInfo["body"] as? [String: Any])?["reconnecting"] as? Bool == true
+                    guard error.code == 503, reconnecting else { throw error }
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                } else {
+                    // A network failure.
+                    try? await Task.sleep(nanoseconds: UInt64(800_000_000 * (attempt + 1)))
+                }
+                attempt += 1
+            }
+        }
+    }
+
     private func send<T>(_ req: URLRequest) async throws -> T {
         let (data, response) = try await urlSession.data(for: req)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 500
-            // Routes report failures as {"error": ...}; surface that text, not the raw JSON.
+            // Routes report failures as {"error": ...}; surface that text, not
+            // the raw JSON, and keep the parsed body for retry decisions.
             var str = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = obj["error"] as? String {
-                str = err
+            var info: [String: Any] = [NSLocalizedDescriptionKey: str]
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let err = obj["error"] as? String { str = err }
+                info[NSLocalizedDescriptionKey] = str
+                info["body"] = obj
             }
-            throw NSError(domain: "Bridge", code: code, userInfo: [NSLocalizedDescriptionKey: str])
+            throw NSError(domain: "Bridge", code: code, userInfo: info)
         }
         guard let result = try JSONSerialization.jsonObject(with: data) as? T else {
             throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
