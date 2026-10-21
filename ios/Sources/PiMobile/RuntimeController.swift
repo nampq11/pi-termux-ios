@@ -84,8 +84,7 @@ final class RuntimeController: ObservableObject {
         }
     }
 
-    /// Environment for the bridge; mirrors PiService.startNode on Android
-    /// minus everything termux-specific (PREFIX, LD_LIBRARY_PATH, PI_SHELL…).
+    /// Environment for the bridge (fixed loopback port, in-process engine).
     private func environment() -> [String: String] {
         [
             "HOME": root.appendingPathComponent("home").path,

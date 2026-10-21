@@ -1,4 +1,4 @@
-# runtime/ — the pi-termux-mobile runtime
+# runtime/ — the pi-termux-ios runtime
 
 No build step: these files ship as-is, twice (see "Payloads" below). Node >= 22.19,
 ESM, German UI text is deliberate. `npm test` runs every `test-*.mjs` suite —
@@ -8,8 +8,9 @@ internals.
 ## Entry points
 
 - `server.mjs` — the phone bridge (HTTP + SSE + WebSocket/PTY) behind the app
-  WebView. Spawned by Android's `PiService.java`; on iOS it runs in-process in
-  `NodeEngine.swift` with `PI_PLATFORM=ios` (no child processes, no PTY).
+  UI. On iOS it runs in-process in `NodeEngine.swift` with `PI_PLATFORM=ios`
+  (no child processes, no PTY); during development it runs directly under Node
+  on Linux and serves the web UI.
 - `pi-serverd.mjs` — the daemon on remote hosts (Unix socket).
   `serverd-tcp.mjs` is its opt-in loopback TCP listener for the pure-JS SSH
   tunnel on iOS.
@@ -19,7 +20,8 @@ internals.
 ## Layers (server.mjs is the composition root)
 
 - `bridge/` — HTTP plumbing: `http.mjs` (MIME, body, token auth, static),
-  `sse.mjs` (event hub), `pty.mjs` (terminal), `routes/` (system, sessions,
+  `sse.mjs` (event hub), `pty.mjs` (terminal; on JS backends the SSH channel
+  itself is the pty for remote sessions), `routes/` (system, sessions,
   ssh, remote, accounts). Each route module is a factory taking the shared
   deps object; `server.mjs` dispatches to them in order (spaces before the
   readiness gate, accounts after it).
@@ -34,9 +36,11 @@ internals.
   cluster: SSH transport with injectable backends (spawn/js), one bridge
   attachment owned by a generation, staged daemon provisioning with rollback,
   and the pi-durable ExecutionEnv over HTTP (`readlines` windows with a
-  whole-file fallback for old env-servers).
-- `spaces-mobile.mjs`, `space-keystore.mjs` — Spaces pairing/control on the
-  phone, Android keystore signer.
+  whole-file fallback for old env-servers). `ustar.mjs` builds the staging
+  tar in-process (iOS denies spawning tar); `ssh-copy-id.mjs` installs the
+  device key with password auth (iOS has no PTY for the interactive binary).
+- `spaces-mobile.mjs`, `space-keys.mjs` — Spaces pairing/control on the
+  phone; P-256 device keys as PEM files in the private state dir.
 - `manual-remote-client.mjs` — manual smoke script against a pi-serverd socket.
 
 ## public/ (WebView pages)

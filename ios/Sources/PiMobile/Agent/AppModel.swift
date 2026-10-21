@@ -30,6 +30,11 @@ public final class AppModel {
     public var agentHost = AgentHost()
     public var agentModels: [AgentModelOption] = []
     public var agentAccounts: [AgentAccount] = []
+    public var clients = ClientsModel()
+    public var keyInstall = KeyInstallModel()
+    public var remote = RemoteModel()
+    public var spaces = SpacesModel()
+    public var spaceCtl = SpaceCtlModel()
 
     public var agentListShown = false
     public var agentAccountsShown = false
@@ -41,8 +46,7 @@ public final class AppModel {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
-    public private(set) var baseURL: URL?
-    public private(set) var token: String = ""
+    public let api = BridgeAPI()
 
     @ObservationIgnored private var sseTask: Task<Void, Never>?
     @ObservationIgnored private var urlSession = URLSession(configuration: .default)
@@ -58,19 +62,13 @@ public final class AppModel {
     // MARK: - Bridge Connection & Event Stream
 
     public func connect(url: URL) {
-        let port = url.port ?? 41943
-        var comps = URLComponents()
-        comps.scheme = "http"
-        comps.host = url.host ?? "127.0.0.1"
-        comps.port = port
-        guard let base = comps.url else { return }
-
-        let queryToken = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "token" })?.value ?? ""
-
-        self.baseURL = base
-        self.token = queryToken
-
+        api.configure(url: url)
+        clients.attach(api)
+        keyInstall.attach(api)
+        remote.attach(api)
+        remote.attach(keyInstall)
+        spaces.attach(api)
+        spaceCtl.attach(api)
         startEventStream()
         Task {
             await loadAgentAccounts()
@@ -89,14 +87,14 @@ public final class AppModel {
 
     private func startEventStream() {
         sseTask?.cancel()
-        guard let baseURL else { return }
+        guard let baseURL = api.baseURL else { return }
 
         sseTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
                     var comps = URLComponents(url: baseURL.appendingPathComponent("api/events"), resolvingAgainstBaseURL: false)
-                    comps?.queryItems = [URLQueryItem(name: "token", value: self.token)]
+                    comps?.queryItems = [URLQueryItem(name: "token", value: self.api.token)]
                     guard let sseURL = comps?.url else { return }
 
                     var req = URLRequest(url: sseURL)
@@ -351,7 +349,7 @@ public final class AppModel {
 
         Task {
             do {
-                let res: [String: Any] = try await post("/api/prompt", body: [
+                let res: [String: Any] = try await api.post("/api/prompt", body: [
                     "message": trimmed,
                     "requestId": UUID().uuidString
                 ])
@@ -369,13 +367,13 @@ public final class AppModel {
     public func agentStop() {
         haptic()
         agent.state.busy = false
-        Task { _ = try? await post("/api/abort", body: [:]) as [String: Any] }
+        Task { _ = try? await api.post("/api/abort", body: [:]) as [String: Any] }
     }
 
     public func agentNewConversation() {
         Task {
             do {
-                let res: [String: Any] = try await post("/api/sessions/new", body: [:])
+                let res: [String: Any] = try await api.post("/api/sessions/new", body: [:])
                 if let newId = (res["activeId"] as? String).flatMap(Int.init) {
                     agent.state.conversationId = newId
                 }
@@ -389,7 +387,7 @@ public final class AppModel {
     public func agentSwitch(_ id: Int) {
         Task {
             do {
-                _ = try await post("/api/sessions/select", body: ["id": String(id)]) as [String: Any]
+                _ = try await api.post("/api/sessions/select", body: ["id": String(id)]) as [String: Any]
                 agent.state.conversationId = id
                 await loadConversations()
             } catch {
@@ -401,7 +399,7 @@ public final class AppModel {
     public func agentRename(_ id: Int, _ title: String) {
         Task {
             do {
-                _ = try await post("/api/sessions/rename", body: ["id": String(id), "name": title]) as [String: Any]
+                _ = try await api.post("/api/sessions/rename", body: ["id": String(id), "name": title]) as [String: Any]
                 await loadConversations()
             } catch {
                 Self.log.error("rename failed: \(error.localizedDescription, privacy: .public)")
@@ -412,7 +410,7 @@ public final class AppModel {
     public func agentArchive(_ id: Int, _ archived: Bool) {
         Task {
             do {
-                _ = try await post("/api/sessions/delete", body: ["id": String(id)]) as [String: Any]
+                _ = try await api.post("/api/sessions/delete", body: ["id": String(id)]) as [String: Any]
                 await loadConversations()
             } catch {
                 Self.log.error("archive/delete failed: \(error.localizedDescription, privacy: .public)")
@@ -424,7 +422,7 @@ public final class AppModel {
         UserDefaults.standard.set(["provider": option.provider, "modelId": option.model], forKey: "agent.model")
         Task {
             do {
-                _ = try await post("/api/model", body: ["provider": option.provider, "modelId": option.model]) as [String: Any]
+                _ = try await api.post("/api/model", body: ["provider": option.provider, "modelId": option.model]) as [String: Any]
                 agent.state.model = AgentModelRef(provider: option.provider, id: option.model, name: option.name)
             } catch {
                 Self.log.error("setModel failed: \(error.localizedDescription, privacy: .public)")
@@ -434,7 +432,7 @@ public final class AppModel {
 
     public func loadConversations() async {
         do {
-            let res: [String: Any] = try await get("/api/sessions")
+            let res: [String: Any] = try await api.get("/api/sessions")
             let activeId = (res["activeId"] as? String).flatMap(Int.init)
             if let list = res["sessions"] as? [[String: Any]] {
                 agent.state.conversations = list.compactMap { d in
@@ -451,7 +449,7 @@ public final class AppModel {
 
     public func loadAgentModels() async {
         do {
-            let res: [String: Any] = try await get("/api/models")
+            let res: [String: Any] = try await api.get("/api/models")
             if let list = res["models"] as? [[String: Any]] {
                 self.agentModels = list.compactMap { d in
                     guard let p = d["provider"] as? String, let m = d["modelId"] as? String else { return nil }
@@ -478,31 +476,169 @@ public final class AppModel {
             ("minimax", "MiniMax", false)
         ]
 
-        var savedKeys = Set<String>()
+        // provider id → credential type ("oauth" | "api_key")
+        var savedTypes = [String: String]()
         do {
-            let res: [String: Any] = try await get("/api/providers")
+            let res: [String: Any] = try await api.get("/api/providers")
             if let list = res["providers"] as? [[String: Any]] {
                 for p in list {
-                    if let id = p["provider"] as? String { savedKeys.insert(id) }
+                    if let id = p["provider"] as? String {
+                        savedTypes[id] = p["type"] as? String ?? "api_key"
+                    }
                 }
             }
         } catch {}
 
-        if !savedKeys.isEmpty {
+        // Only providers the bridge offers an OAuth login for get a
+        // sign-in row (the web page fills its select from the same list).
+        var oauthLabels = [String: String]()
+        if let res = try? await api.get("/api/oauth/providers") as [String: Any],
+           let list = res["providers"] as? [[String: Any]] {
+            for p in list {
+                if let id = p["id"] as? String {
+                    oauthLabels[id] = (p["label"] as? String) ?? (p["name"] as? String) ?? id
+                }
+            }
+        }
+
+        if !savedTypes.isEmpty {
             agent.state.signedIn = true
         }
 
         agentAccounts = defaultProviders.map { id, name, featured in
-            AgentAccount(
+            let oauthLabel = oauthLabels[id]
+            return AgentAccount(
                 id: id,
                 name: name,
                 featured: featured,
+                oauthName: oauthLabel != nil ? name : nil,
+                oauthLabel: oauthLabel,
                 apiKeyName: "\(name) API Key",
-                signedIn: savedKeys.contains(id) ? "api_key" : nil
+                signedIn: savedTypes[id]
             )
         }
     }
+
+    /// The OAuth device/subscription flow from keys.js, rendered by
+    /// LoginFlowView: start, poll for events (browser URL, device code,
+    /// messages) and prompts, answer prompts, finish on done.
+    private func runOAuth(_ provider: String) async {
+        agentLoginError = nil
+        agentHost.beginLogin(provider)
+        agentHost.progress = ["starting sign-in…"]
+        do {
+            let started: [String: Any] = try await api.post("/api/oauth/start", body: ["provider": provider])
+            guard let loginId = started["id"] as? String else {
+                agentLoginError = (started["error"] as? String) ?? "could not start sign-in"
+                agentHost.endLogin()
+                return
+            }
+            var answeredPrompt: String?
+            var promptCount = 0
+            // Cancelling the sheet (endLogin) clears loginProvider, which
+            // ends the loop; the bridge keeps the login until it times out.
+            while agentHost.loginProvider != nil {
+                try await Task.sleep(nanoseconds: 600_000_000)
+                guard agentHost.loginProvider != nil else { return }
+                let state: [String: Any] = try await api.get(
+                    "/api/oauth/status",
+                    query: [URLQueryItem(name: "id", value: loginId)]
+                )
+                for event in state["events"] as? [[String: Any]] ?? [] {
+                    switch event["type"] as? String {
+                    case "auth_url":
+                        if let urlStr = event["url"] as? String {
+                            agentHost.progress.append("\(event["instructions"] as? String ?? "open sign-in page") — \(urlStr)")
+                            if let url = URL(string: urlStr) {
+                                _ = await UIApplication.shared.open(url)
+                            }
+                        }
+                    case "device_code":
+                        agentHost.deviceCode = AgentHost.DeviceCode(
+                            code: event["userCode"] as? String ?? "",
+                            uri: event["verificationUri"] as? String ?? ""
+                        )
+                    default:
+                        if let message = event["message"] as? String {
+                            agentHost.progress.append(message)
+                        }
+                    }
+                }
+                if let p = state["prompt"] as? [String: Any] {
+                    // The prompt id is an opaque string on the wire; the
+                    // display id only needs to differ between prompts.
+                    let rawId = String(describing: p["id"] ?? "")
+                    if rawId != answeredPrompt {
+                        answeredPrompt = rawId
+                        promptCount += 1
+                        let options = (p["options"] as? [[String: Any]])?.compactMap { o in
+                            AgentHost.Option(id: o["id"] as? String ?? "", label: o["label"] as? String ?? "")
+                        } ?? []
+                        let prompt = AgentHost.Prompt(
+                            id: promptCount,
+                            type: options.isEmpty ? ((p["type"] as? String) ?? "text") : "select",
+                            message: (p["message"] as? String) ?? "Enter the requested value.",
+                            placeholder: p["placeholder"] as? String,
+                            options: options
+                        )
+                        let value: String? = await withCheckedContinuation { cont in
+                            agentHost.showPrompt(prompt) { cont.resume(returning: $0) }
+                        }
+                        guard agentHost.loginProvider != nil else { return }
+                        _ = try await api.post("/api/oauth/respond", body: [
+                            "id": loginId,
+                            "promptId": rawId,
+                            "value": value ?? ""
+                        ]) as [String: Any]
+                    }
+                }
+                if state["done"] as? Bool == true {
+                    if let error = state["error"] as? String {
+                        agentLoginError = "error: \(error)"
+                    } else {
+                        agentHost.progress.append("signed in: \(provider)")
+                        await loadAgentAccounts()
+                        await loadAgentModels()
+                    }
+                    agentHost.endLogin()
+                    return
+                }
+            }
+        } catch {
+            agentLoginError = error.localizedDescription
+            agentHost.endLogin()
+        }
+    }
+
+    public struct PiVersionInfo: Equatable, Sendable {
+        public let installed: String
+        public let latest: String
+        public let updateAvailable: Bool
+        public let canUpdate: Bool
+    }
+
+    public var piVersion: PiVersionInfo?
+
+    public func loadPiVersion() async {
+        do {
+            let res: [String: Any] = try await api.get("/api/pi-version")
+            guard res["error"] == nil else { return }
+            piVersion = PiVersionInfo(
+                installed: res["installed"] as? String ?? "?",
+                latest: res["latest"] as? String ?? "?",
+                updateAvailable: res["updateAvailable"] as? Bool ?? false,
+                canUpdate: res["canUpdate"] as? Bool ?? false
+            )
+        } catch {
+            Self.log.error("loadPiVersion failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     public func agentLogin(_ provider: String, _ type: String) async {
+        if type == "oauth" {
+            await runOAuth(provider)
+            return
+        }
         agentLoginError = nil
         let prompt = AgentHost.Prompt(
             id: 1,
@@ -516,7 +652,7 @@ public final class AppModel {
             guard !cleanKey.isEmpty else { return }
             Task {
                 do {
-                    _ = try await self.post("/api/auth", body: ["provider": provider, "key": cleanKey]) as [String: Any]
+                    _ = try await self.api.post("/api/auth", body: ["provider": provider, "key": cleanKey]) as [String: Any]
                     await self.loadAgentAccounts()
                     await self.loadAgentModels()
                     if let first = self.agentModels.first(where: { $0.provider == provider }) ?? self.agentModels.first {
@@ -535,7 +671,7 @@ public final class AppModel {
     }
 
     public func agentLogout(_ provider: String) async {
-        _ = try? await post("/api/auth", body: ["provider": provider, "delete": true]) as [String: Any]
+        _ = try? await api.post("/api/auth", body: ["provider": provider, "delete": true]) as [String: Any]
         await loadAgentAccounts()
         await loadAgentModels()
     }
@@ -555,55 +691,7 @@ public final class AppModel {
 
     public func openLocation(_ path: String, line: Int? = nil, pane: Int? = nil, keepConsole: Bool = true) async {}
 
-    // MARK: - HTTP Helpers
-
-    private func request(path: String, method: String, body: [String: Any]? = nil) throws -> URLRequest {
-        guard let baseURL else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Bridge not ready"])
-        }
-        var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-        comps?.queryItems = [URLQueryItem(name: "token", value: token)]
-        guard let url = comps?.url else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
-        }
-
-        var req = URLRequest(url: url)
-        req.httpMethod = method
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let body {
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        }
-        return req
-    }
-
-    private func get<T>(_ path: String) async throws -> T {
-        let req = try request(path: path, method: "GET")
-        let (data, response) = try await urlSession.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 500
-            let str = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
-            throw NSError(domain: "Bridge", code: code, userInfo: [NSLocalizedDescriptionKey: str])
-        }
-        guard let result = try JSONSerialization.jsonObject(with: data) as? T else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
-        }
-        return result
-    }
-
-    private func post<T>(_ path: String, body: [String: Any]) async throws -> T {
-        let req = try request(path: path, method: "POST", body: body)
-        let (data, response) = try await urlSession.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 500
-            let str = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
-            throw NSError(domain: "Bridge", code: code, userInfo: [NSLocalizedDescriptionKey: str])
-        }
-        guard let result = try JSONSerialization.jsonObject(with: data) as? T else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
-        }
-        return result
-    }
+    // MARK: - Content Helpers
 
     private func extractText(from content: Any?) -> String {
         if let s = content as? String { return s }

@@ -1,26 +1,33 @@
-# pi-termux-mobile
+# pi-termux-ios
 
 > **Experimental software:** This is a personal prototype under active
-> development. Remote sessions, the embedded Termux runtime, and Android
-> background-process handling may still change or fail on individual devices.
->
-> **Version 0.0.5** — still quick & dirty, see the [changelog](#changelog).
+> development. Remote sessions and iOS background/suspend handling may still
+> change or fail on individual devices.
 
-Minimal Android app that embeds Termux-built binaries (Node.js 26.4.0, bash,
-coreutils, git, ripgrep, fd, openssh, npm, util-linux `script`, …) plus a
-**pi-durable** harness (`@earendil-works/pi-durable` 1.0.2 + pi-ai/chord, with
-pi-coding-agent 1.0.2 bundled for the CLI + TUI) behind a tiny
-HTTP/SSE/WebSocket bridge (`runtime/server.mjs`). UI is a local WebView on
-`http://127.0.0.1:<port>` (ephemeral port → `files/home/.pi-mobile/port`,
-token → `…/token`).
-An iOS sibling app under `ios/` runs the same bridge with an in-process Node
-engine — see [iOS app (xtool)](#ios-app-xtool).
+iOS app that runs the **pi** coding agent (`@earendil-works/pi-coding-agent`
+1.0.2 with a **pi-durable** harness + pi-ai/chord) on the phone, behind a tiny
+HTTP/SSE/WebSocket bridge (`runtime/server.mjs`). iOS never allows apps to
+`exec()` external binaries, so there is no rootfs and no `node` child process:
+a Node engine is linked into the app — nodejs-mobile **Node 24 LTS**
+(`NodeMobile.xcframework`, fetched and SHA256-pinned by
+`scripts/prepare-runtime-ios.py`; includes `node:sqlite` for pi-durable) — and
+`server.mjs` runs in-process on a dedicated thread via `node_start`.
+
+The UI is a native SwiftUI app (`ios/`) speaking to the bridge's HTTP/SSE API;
+the bridge also serves a web UI (`runtime/public/`) that remains the full
+reference implementation and is used from a desktop browser during development
+on Linux.
+
+This fork is **iOS-only**. It started as `pi-termux-mobile` (an Android app
+embedding a Termux rootfs); the Android app, its build, and its packaging were
+removed — `ANALYSE.md` and the changelog preserve that history, and the
+upstream project still carries it.
 
 The durable harness gives: SQLite-backed conversations
-(`files/home/.pi-mobile/harness.sqlite` — survive process death,
-`harness.resume()` continues interrupted runs), a `subagent` tool (child
-conversations owned by the calling task), model selection per conversation,
-and per-conversation execution environments — including remote hosts.
+(`home/.pi-mobile/harness.sqlite` — survive process death, `harness.resume()`
+continues interrupted runs), a `subagent` tool (child conversations owned by
+the calling task), model selection per conversation, and per-conversation
+execution environments — including remote hosts.
 
 ## Space RPC through pi-serverd
 
@@ -38,64 +45,15 @@ SSH/socket access does not assign a space role automatically. Federation mode
 uses `PI_SERVERD_FEDERATION_CONFIG` and its provisioned identity, key proofs,
 and grants. Client request fields cannot override either identity.
 
-## App pages
-
-- **Chat** (`/`) — durable pi conversation (prompt, abort, new session,
-  model dropdown). `pi mobile` header links back here from every page.
-- **Accounts** (`keys.html`) — API-key management plus OAuth/subscription
-  sign-in. Credentials are stored as `~/.pi/agent/auth.json` in pi CLI format.
-- **Sessions** (`sessions.html`) — local durable-session browser: create,
-  open, rename, fork (continue from a session's newest entry), or stop and
-  remove a session from the visible list.
-- **Clients** (`clients.html`) — remote SSH host registry + device keypair
-  (ed25519): generate, show pubkey, interactive `ssh-copy-id` in the
-  terminal page.
-- **Remote** (`remote.html`) — attach to durable sessions on other machines
-  via the pi-server protocol: choose a saved SSH host, select/create/remove a
-  session, and choose that remote session's model (see below).
-- **pi CLI** (`terminal.html`) — real pi TUI over WebSocket → `script` PTY
-  → `node cli.js`, with on-screen extra keys (esc/tab/ctrl/arrows/pgup/pgdn)
-  for menus and scrollback. `?ssh=user@host` runs `ssh -tt <host> pi`
-  instead — full remote pi TUI.
-
-## App screens
-
-Screenshots from a phone (SSH key and host addresses blacked out).
-
-| Chat | Remote (connected) |
-|---|---|
-| <img src="docs/screens/chat.png" width="260" alt="Chat page"> | <img src="docs/screens/remote.png" width="260" alt="Remote page connected to a host"> |
-| Local conversation running on the phone (durable: SQLite-backed, survives process death), with model dropdown, session name, token/cost counter and new / compact buttons. | Host selector with **connect/disconnect** and **stop server**, remote session dropdown (rename, new, remove, abort, compact) and a conversation that runs in `pi-serverd` on the host (also durable, stored there; the phone is only the client and re-attaches after a lost connection). |
-
-| pi CLI (local) | pi CLI (ssh) |
-|---|---|
-| <img src="docs/screens/pi-cli.png" width="260" alt="pi CLI terminal"> | <img src="docs/screens/pi-cli-ssh.png" width="260" alt="pi CLI over ssh on a remote host"> |
-| Full interactive pi TUI in the built-in terminal, running on the phone, with an esc / ctrl / arrow key row. | The same full pi TUI, but running on the remote host over SSH (here: "wo bin ich?" answers `/home/lux`, and `ip` lists the host's addresses). Pick the host on the Clients page with its **▸_** button. |
-
-| Clients |
-|---|
-| <img src="docs/screens/clients.png" width="260" alt="Clients page"> |
-| SSH key of this device and the list of remote hosts, each with terminal (**▸_**, starts pi CLI ssh), key-install and remove buttons. |
-
-## Accounts: API keys and OAuth
-
-The **Accounts** page supports both API keys and provider OAuth/subscription
-logins. Select an OAuth provider under **OAuth / subscription**, then choose
-**sign in**. When a provider offers multiple methods, the app shows a dialog
-for example for **Browser login** or **Device code login**. Browser flows open
-in the Android browser and return through the app's loopback callback; device
-flows show the verification URL and code in the app. Completed credentials are
-stored in `~/.pi/agent/auth.json` and immediately become available to the
-model picker.
-
 ## Remote control, two ways
 
 ### 1. SSH pi TUI (immediate, full fidelity)
 
-`ssh`/`ssh-copy-id`/`ssh-keygen` ship in the rootfs. Workflow:
-Clients → *generate key* → *add client* (`user@host[:port]`) → `⇧key`
-(interactive ssh-copy-id, type remote password) → `▸_` connects. The menu
-item *pi CLI (ssh)* does a one-off connect without saving a host.
+SSH reaches hosts through a pure-JS client on iOS (`ssh2` over the bridge;
+`ssh`/`ssh-keygen` binaries on a Linux dev machine — the backend is selected
+at startup). Workflow: Clients → *generate key* → *add client*
+(`user@host[:port]`) → `⇧key` (install the device key, remote password once)
+→ `▸_` connects and runs the full pi TUI on the host.
 
 ### 2. pi-server protocol (multi-client attach to durable sessions)
 
@@ -111,18 +69,21 @@ node pi-serverd.mjs        # socket: ~/.pi-serverd/server.sock
 ```
 
 The phone bridge (`runtime/remote-client.mjs`) forwards the remote unix
-socket through the saved SSH client entry to a unix socket in the app-private
-directory (`ssh -N -L ~/.pi-mobile/tunnels/<id>.sock:~/.pi-serverd/server.sock`,
-OpenSSH 6.7+). A loopback TCP port would be reachable by every app on the
-phone, and pi-server does not authenticate peers; SSH is the only auth. It then
-attaches via `@earendil-works/pi-client`'s unix transport. A dropped tunnel is
-rebuilt with backoff and the session is re-attached; prompts carry a
-`requestId`, so a retried prompt is answered exactly once. `user@host:port` is converted to OpenSSH's `-p port`
-form. The Remote page connects and loads sessions as soon as a host is
-selected, creates one automatically when the host has none, opens the newest
-session first, restores its transcript, and displays a model picker using the
-remote host's available models. Remote uses non-interactive SSH key login, so
-run **⇧key** / `ssh-copy-id` for a host before using it here.
+socket to a unix socket in the app-private directory. With the OpenSSH
+backend this is streamlocal forwarding (`ssh -N -L`); the pure-JS backend
+cannot open streamlocal channels and instead bridges through
+**direct-tcpip** into pi-serverd's opt-in loopback TCP listener
+(`PI_SERVERD_TCP_PORT`, published in `~/.pi-serverd/server.tcp` — provisioning
+from a JS backend enables it automatically). A loopback TCP port would be
+reachable by every app on the phone, and pi-server does not authenticate
+peers; SSH is the only auth. A dropped tunnel is rebuilt with backoff and the
+session is re-attached; prompts carry a `requestId`, so a retried prompt is
+answered exactly once. `user@host:port` targets are supported. The Remote page
+connects and loads sessions as soon as a host is selected, creates one
+automatically when the host has none, opens the newest session first, restores
+its transcript, and displays a model picker using the remote host's available
+models. Remote uses non-interactive SSH key login, so install the device key
+(**⇧key**) for a host before using it here.
 On connect the app checks the host and sets it up if needed — see [Remote host setup](#remote-host-setup-automatic).
 Endpoints: `/api/remote/{connect,status,trust-host,auth-status,copy-auth,sessions,models,model,create,delete,attach,prompt,abort,compact,state,history,events,disconnect,stop}`.
 Events are long-polled with a sequence number and an epoch (`?after=<seq>&epoch=<id>`);
@@ -140,8 +101,8 @@ mutating calls are serialized with deletion so new work cannot slip past its abo
 The state directory is `0700` and the socket `0600`. `pi-client` runs
 on the phone as the protocol client, while the durable harness, model calls,
 and tools run in `pi-serverd` on the remote host. For the full interactive Pi
-TUI instead, use **Clients → ▸_** or **pi CLI (ssh)**; run it in `tmux` when an
-SSH disconnect must not end the TUI process.
+TUI instead, use **Clients → ▸_**; run it in `tmux` when an SSH disconnect must
+not end the TUI process.
 
 ### 3. env-server (remote *tool execution*, different thing)
 
@@ -153,7 +114,7 @@ host via `runtime/remote-env.mjs` (client) + `runtime/env-server.mjs`:
 PI_REMOTE_TOKEN=<secret, >=16 chars> PI_REMOTE_PORT=7842 node env-server.mjs
 # reach it via ssh -L or a VPN address: PI_REMOTE_HOST=<tailscale-ip>
 
-# on the phone: files/home/.pi-mobile/remotes.json (or PI_REMOTES env)
+# on the phone: home/.pi-mobile/remotes.json (or PI_REMOTES env)
 {"workstation": {"url": "http://127.0.0.1:7842", "token": "<secret>"}}
 ```
 
@@ -173,14 +134,14 @@ tunnel/VPN — it executes arbitrary commands.
 
 ## Remote host setup (automatic)
 
-Connecting to a host from the **Remote** page, **Clients → ▸_** or **pi CLI (ssh)**
-prepares the host over SSH. Everything runs with the phone's key (non-interactive
-`ssh`), under the host user's account; no root is needed except for installing tmux.
+Connecting to a host from the **Remote** page or **Clients → ▸_** prepares the
+host over SSH. Everything runs with the phone's key (non-interactive SSH),
+under the host user's account; no root is needed except for installing tmux.
 Each sensitive step asks first.
 
 | Step | When | Asks? |
 |---|---|---|
-| **SSH key** | host rejects the phone's ed25519 key | yes — runs `ssh-copy-id` in the terminal (password once), then returns and reconnects |
+| **SSH key** | host rejects the phone's ed25519 key | yes — installs the key (remote password once), then returns and reconnects |
 | **SSH trust + auth.json** | host has no `~/.pi/agent/auth.json` | yes — verify and persist the SSH fingerprint first, then **red warning** before copying API keys / OAuth tokens (mode 600) |
 | **pi-serverd** (Remote page) | no daemon running | no — installs and starts it |
 | **pi-serverd update** | daemon running, files differ from the phone's | yes — the daemon restarts, running work is interrupted (durable sessions resume) |
@@ -211,7 +172,7 @@ and the optional generated `space-examples/` directory, stored in
 difference to the files on the phone means *outdated*; declining the update keeps
 the old daemon.
 
-**pi.** For the full TUI, `ssh -tt <host> pi` runs through a login shell. If `pi`
+**pi.** For the full TUI, SSH runs `pi` through a login shell. If `pi`
 is missing and npm exists, the latest `@earendil-works/pi-coding-agent` is
 installed with `npm install -g --prefix ~/.local` (no root; `~/.local/bin` is put
 in front of `PATH`) and started; the installation output is visible in the terminal.
@@ -230,112 +191,47 @@ Volta, asdf and nodenv set `PATH` in `~/.bashrc` — through a prelude that sour
 *Internal server error*. Declining the copy is fine: add a key on the host (`pi`,
 `/login`) instead. Never copy it to hosts you do not fully trust.
 
+## Web UI (development reference)
+
+The bridge serves `runtime/public/`: Chat (`/`), Accounts (`keys.html`),
+Sessions (`sessions.html`), Clients (`clients.html`), Remote (`remote.html`),
+pi CLI (`terminal.html`), Spaces (`spaces.html`) and Spaces-Steuerung
+(`spacectl.html`). It is the feature-complete reference UI — every page speaks
+the same `/api` endpoints the native SwiftUI screens use — and the everyday UI
+when developing the bridge on a Linux machine. Screenshots:
+`docs/screens/`.
+
+With `PI_PLATFORM=ios` the server injects `window.PI_MOBILE_IOS=1` into HTML
+pages; `menu.js` then hides only the local pi CLI page — child processes are
+denied in the in-process engine. Everything else stays reachable in the web UI.
+
+## Accounts: API keys and OAuth
+
+Accounts support both API keys and provider OAuth/subscription logins. Select
+an OAuth provider under **OAuth / subscription**, then choose **sign in**. When
+a provider offers multiple methods, a dialog offers for example **Browser
+login** or **Device code login**. Browser flows open in the system browser and
+the app polls the login until it completes — returning to the app finishes the
+sign-in; device flows show the verification URL and code in the app. Completed
+credentials are stored in
+`~/.pi/agent/auth.json` and immediately become available to the model picker.
+
 ## Layout
 
-- `android/` — Gradle project (app module, Java only, no NDK)
+- `ios/` — the iOS app: SwiftPM package built with [xtool](https://xtool.sh)
+  (Swift shell + native UI), `NodeMobile.xcframework`, runtime payload zip
 - `runtime/` — `server.mjs` (durable bridge + `/pty` WS + remote attach),
   `common.mjs` (shared harness setup, credential store with file lock, durable
   session registry, sequenced event hub, single-owner lock),
   `pi-serverd.mjs` (remote session daemon), `remote-client.mjs` (pi-client
   + ssh tunnel), `remote-env.mjs`/`env-server.mjs` (tool exec),
-  `public/` (chat, keys, clients, remote, terminal pages + shared menu),
-  package.json for prod node_modules
-- `debs/` — Termux apt packages (aarch64) + extracted `rootfs/` used to build
-  `rootfs.bin` (see below)
-- `tools/` — local toolchain (JDK 21, Android SDK, Gradle 8.10.2) — not committed
+  `public/` (web UI), package.json for prod node_modules
+- `scripts/` — `prepare-runtime-ios.py` (payload + engine), `payload_common.py`
+  (shared packaging + guards), `mux-forward.py` (USB port forward),
+  `verify-ios-device.sh`
+- `tools/` — local toolchain artifacts (nodejs-mobile archive) — not committed
 
 ## Build
-
-```bash
-cd android
-JAVA_HOME=<path-to>/tools/jdk21 ./gradlew assembleDebug
-# APK: app/build/outputs/apk/debug/app-debug.apk (~107 MB, aarch64 only content)
-```
-
-Toolchain notes:
-
-- JDK 21 (Temurin) — Gradle/AGP 8.7.3 does not support the system JDK 25.
-- compileSdk 35, minSdk 26, targetSdk **28** — keeps direct `execve()` of
-  app-private binaries working (Android 10+ SELinux blocks it for
-  targetSdk >= 29). `PiService` falls back to launching node via
-  `/system/bin/linker64` if direct exec ever fails, so targetSdk can be raised.
-- Asset fingerprints automatically trigger re-extraction when the runtime or rootfs changes.
-  `RUNTIME_VERSION` in `RuntimeInstaller.java` covers installer behavior changes. An upgrade replaces `usr/` and `runtime/` entirely
-  (archives are streamed into tar); `home/` and `work/` are kept.
-
-## Remote regression tests
-
-```bash
-cd runtime
-npm ci --ignore-scripts
-npm test
-```
-
-These offline tests need Node >=22.19.0, bash and tar; no SSH host, API keys or
-model calls are needed. They cover rename routing, deleted-session attachments,
-prompt deduplication, release rollback/restart, SSH/protocol/RPC deadlines and
-connection cancellation races. Metadata and protocol connection attempts time out
-after 15 seconds; RPC calls after 35 seconds (including 25-second event polls).
-Disconnect cancels pending connection and recovery operations.
-
-## Repackaging assets
-
-Every Android build runs `scripts/prepare-runtime.py` before `preBuild`. It rebuilds pi-spaces from the
-sibling checkout, synchronizes `runtime/pi-spaces.mjs` and compiled `runtime/space-examples/*.mjs`, then
-packages `runtime.bin` and generates `payload.sha256` for the runtime/rootfs pair. Changed payloads are
-re-extracted on the device without a manual version bump. Unchanged files keep their timestamps.
-
-Build prerequisites: Python 3, installed mobile runtime dependencies and the prepared rootfs asset.
-Refreshing from source additionally needs Node/npm and the pi-spaces development dependencies.
-Set `PI_SPACES_SOURCE` for a source checkout elsewhere. If the source is missing or incompatible, the
-Android build warns and uses the existing mobile bundles. The checked-in `pi-spaces.mjs` is required;
-generated `space-examples/` CLI programs are optional, so a fresh checkout can run tests and provision
-a remote host without the sibling source tree. Available examples are still packaged, hashed and
-uploaded. Errors while building an available source checkout are reported as build failures.
-Running `npm run bundle` in pi-spaces also synchronizes this checkout automatically; an alternate mobile
-checkout can be selected with `PI_SPACES_MOBILE_ROOT`. Generated example modules are CLI programs,
-not additional mobile buttons or Federation services. Remote provisioning includes them in its release hash
-and transfers them along with the library; existing update confirmation rules still apply.
-
-```bash
-# rootfs.bin = gzipped tar of the Termux usr/ tree
-cd debs/rootfs/data/data/com.termux/files
-tar czf ../../../../../android/app/src/main/assets/rootfs.bin usr
-
-# Optional manual preparation from the repository root (also performed by Gradle):
-python3 scripts/prepare-runtime.py
-```
-
-The script omits node_modules/.bin and broken links from the archive without deleting local files.
-(.bin suffix because aapt decompresses *.gz assets into the APK uncompressed.
-`RuntimeInstaller` tolerates tar's non-zero exit when the expected payload
-files are present — bad-symlink warnings are only logged.)
-
-## Install / run
-
-```bash
-adb install android/app/build/outputs/apk/debug/app-debug.apk
-# or wireless: ./install-wifi.sh (pairs via mDNS, installs, starts)
-```
-## iOS app (xtool)
-
-The same bridge-and-WebView architecture exists as an iOS app under `ios/`,
-built entirely on Linux/WSL with [xtool](https://xtool.sh) — no Mac, no Xcode.
-One fundamental difference: iOS never allows apps to `exec()` external
-binaries, so there is no Termux rootfs and no `node` child process. Instead a
-Node engine is linked into the app — nodejs-mobile **Node 24 LTS**
-(`NodeMobile.xcframework`, fetched and SHA256-pinned by
-`scripts/prepare-runtime-ios.py`; includes `node:sqlite` for pi-durable) — and
-`server.mjs` runs in-process on a dedicated thread via `node_start`.
-
-The Swift shell mirrors the Android app piece by piece:
-
-| Android | iOS |
-|---|---|
-| `MainActivity` (WebView, poll port/token, external links → browser) | `PiMobileApp`/`BridgeScreen` (native SwiftUI `AgentView`, polls port/token; external links → browser) |
-| `PiService` (foreground service, spawn `node server.mjs`, supervisor restart) | `NodeEngine` (dedicated 8 MB thread, `node_start`; no supervisor — see limits below) |
-| `RuntimeInstaller` (extract tar assets, version stamp) | `RuntimeInstaller` (extract STORED zip payload + stamp; `RuntimeArchive` is a tiny dependency-free unzip) |
-| Termux rootfs (`rootfs.bin`) | — (nothing is exec'd; the engine is a framework) |
 
 ```bash
 # once: xtool setup (Swift 6.4 toolchain, Xcode.xip → darwin SDK, Apple ID)
@@ -346,26 +242,30 @@ cd ios && xtool dev                      # build, sign, install to a USB iPhone
 The payload zip is STORED (uncompressed) on purpose: Apple's Compression
 framework has no raw-DEFLATE mode, so `RuntimeArchive` only copies bytes.
 Changed payload fingerprints re-extract on the next launch; `home/` and
-`work/` are preserved, like on Android.
+`work/` are preserved.
 
-Unlike Android's ephemeral port, the iOS bridge listens on a fixed loopback
-port (`41943`) so it can be reached from the host over USB for debugging:
-`iproxy 41943:41943` (or any usbmux TCP forwarder), then
-`curl http://127.0.0.1:41943/`. The port/token handshake files are unchanged.
-With `PI_PLATFORM=ios` the server also injects `window.PI_MOBILE_IOS=1` into
-HTML pages; `menu.js` then hides Remote/CLI/Clients (they need child
-processes). Android rendering is byte-identical.
+The Swift shell: `RuntimeController` drives boot (install payload → start
+engine → wait for the port/token handshake files, same as the bridge has
+always written: `home/.pi-mobile/port` and `token`), `NodeEngine` runs
+`node_start` on a dedicated 8 MB thread, `RuntimeInstaller` extracts the
+payload with a dependency-free unzip, and the native UI lives in
+`Agent/` + `UIRenderer/`.
+
+Unlike an ephemeral port, the iOS bridge listens on a fixed loopback port
+(`41943`) so it can be reached from the host over USB for debugging:
+`python3 scripts/mux-forward.py 41943 41943` (or any usbmux TCP forwarder),
+then `curl http://127.0.0.1:41943/`.
 
 **Honest limitations of the iOS sandbox:**
 
 - **Works locally:** chat with models over durable SQLite sessions, session
-  management, accounts (API keys + OAuth via the system browser), the web UI,
-  and native SwiftUI UI kit rendering (based on [Terrarium](https://github.com/mitsuhiko/terrarium)'s
-  `uikit` and `UIRenderer`: screens, navigation stacks, tabs, inputs, and canvas).
-- **Cannot work without processes:** bash tool calls, ripgrep, git, the
-  terminal page (PTY), SSH clients/tunnels and the npm self-update rely on
-  child processes — spawns are denied per call on iOS and the affected pages
-  surface those errors.
+  management, accounts (API keys + OAuth via the system browser), SSH to
+  remote hosts through the pure-JS backend, remote sessions over the TCP
+  tunnel, spaces pairing, and the web UI from a desktop browser.
+- **Cannot work without processes:** bash tool calls, ripgrep, git and a
+  *local* pi terminal (PTY) rely on child processes — spawns are denied per
+  call on iOS. The npm self-update is likewise impossible (ship updates with
+  the app payload instead).
 - **Engine cannot restart:** nodejs-mobile allows one engine instance per
   process, so a crashed engine needs an app relaunch. With `PI_PLATFORM=ios`
   the bridge never calls `process.exit` (that would kill the app); boot
@@ -377,42 +277,72 @@ processes). Android rendering is byte-identical.
 
 Build prerequisites: Python 3 + curl for the payload script, xtool with the
 darwin SDK, a USB-connected iPhone (no simulator on Linux). Refreshing
-pi-spaces from source follows the same rules as the Android build
-(`PI_SPACES_SOURCE`).
+pi-spaces from source needs the sibling checkout (`PI_SPACES_SOURCE`).
 
-
-First launch extracts ~170 MB to app-private storage, then a foreground
-service starts `node runtime/server.mjs`. The service runs exactly one bridge:
-reopening the app attaches to the running one instead of restarting it, a
-crashed bridge is restarted with backoff, and stopping sends SIGTERM so the
-harness closes cleanly. `server.mjs` holds `~/.pi-mobile/server.lock`
-(pi-durable allows one storage owner) and stops an orphaned predecessor. Open the app → **Accounts** page to
-store a provider key or sign in through OAuth, then prompt. Local conversation state lives in
-`files/home/.pi-mobile/harness.sqlite` and survives process death. The session
-registry and the active session are a pi-durable document in the same
+First launch extracts the payload to app-private storage, then the engine
+starts the bridge. `server.mjs` holds `~/.pi-mobile/server.lock`
+(pi-durable allows one storage owner). Open the app → **Accounts** to store a
+provider key or sign in through OAuth, then prompt. Local conversation state
+lives in `home/.pi-mobile/harness.sqlite` and survives process death. The
+session registry and the active session are a pi-durable document in the same
 database (an old `sessions.json` is imported once), so a restart reopens the
-session that was active. The chat streams answers, shows tool output (tap a
-tool line), subagent children, usage, and offers *steer* while a run is busy;
-every prompt carries a `requestId` so retries are exactly-once.
-
-Caveats on device:
-
-- MIUI kills the process aggressively in the background (foreground works
-  fine): Settings → Apps → pi mobile → battery saver "no restrictions" +
-  autostart.
-- Android 12+: phantom-process killer may kill node/bash subprocesses;
-  workaround needs `adb shell settings put global
-  settings_enable_monitor_phantom_procs false` or the Android 14+ developer
-  option. Foreground service + PARTIAL_WAKE_LOCK are held while running.
-- Termux scripts inside the bundle have `com.termux` shebangs and will fail;
-  binaries are invoked directly by absolute path (npm CLI shim may need
-  `node $PREFIX/lib/node_modules/npm/bin/npm-cli.js` instead of `npm`).
-- `stty -F /dev/pts/N` is used to push terminal resizes into the `script`
-  PTY (control frames are `\x01`-prefixed JSON on the WS).
+session that was active. The chat streams answers, shows tool output, subagent
+children, usage, and offers *steer* while a run is busy; every prompt carries
+a `requestId` so retries are exactly-once.
 
 See ANALYSE.md for the full evaluation and upstream facts.
 
+## Tests
+
+```bash
+cd runtime
+npm ci --ignore-scripts
+npm test
+```
+
+These offline tests need Node >=22.19.0, bash and tar; no SSH host, API keys or
+model calls are needed. They cover rename routing, deleted-session attachments,
+prompt deduplication, release rollback/restart, SSH/protocol/RPC deadlines,
+connection cancellation races, packaging invariants, and the spaces
+mobile-pairing lifecycle. Metadata and protocol connection attempts time out
+after 15 seconds; RPC calls after 35 seconds (including 25-second event polls).
+Disconnect cancels pending connection and recovery operations.
+
+## Repackaging assets
+
+`scripts/prepare-runtime-ios.py` rebuilds pi-spaces from the sibling checkout,
+synchronizes `runtime/pi-spaces.mjs` and compiled `runtime/space-examples/*.mjs`,
+then packages the runtime payload zip and its fingerprint. Changed payloads are
+re-extracted on the device without a manual version bump. Unchanged files keep
+their timestamps.
+
+Refreshing from source additionally needs Node/npm and the pi-spaces development
+dependencies. Set `PI_SPACES_SOURCE` for a source checkout elsewhere. If the
+source is missing, the build warns (with the stamped provenance) and uses the
+existing mobile bundle — the checked-in `pi-spaces.mjs` with its `pi-spaces.stamp`
+is required; a bundle whose digest drifted from the stamp fails the build.
+Generated `space-examples/` CLI programs are optional, so a fresh checkout can
+run tests and provision a remote host without the sibling source tree. Available
+examples are still packaged, hashed and uploaded. Running `npm run bundle` in
+pi-spaces also synchronizes this checkout automatically; an alternate mobile
+checkout can be selected with `PI_SPACES_MOBILE_ROOT`. Generated example modules
+are CLI programs, not additional mobile buttons or Federation services. Remote
+provisioning includes them in its release hash and transfers them along with the
+library; existing update confirmation rules still apply.
+
 ## Changelog
+
+### 0.0.6 — 2026-10-21
+
+The fork becomes iOS-only (work in progress toward full parity with the former
+Android feature set).
+
+- Removed the Android app (`android/`), its Gradle build, APK packaging
+  (`scripts/prepare-runtime.py`), the wireless installer (`install-wifi.sh`),
+  and the Android/Gradle `.gitignore` entries.
+- The mobile-lifecycle spaces tests moved into the runtime suite
+  (`runtime/test-spaces-mobile.mjs`) and now run as part of `npm test`.
+- README rewritten iOS-first.
 
 ### 0.0.5 — 2026-10-05
 
@@ -435,10 +365,10 @@ New UI design, pi update in the app, remote session rename, and various fixes.
 
 - Shows the installed pi version and checks npm for a newer release.
 - **Update** button runs `npm install @earendil-works/*@latest` directly on the
-  phone (via `node npm-cli.js`, bypassing the Termux shebang issue).
-- npm install uses `--ignore-scripts` to skip esbuild postinstall failures on Android.
+  phone.
+- npm install uses `--ignore-scripts` to skip postinstall failures.
 - Progress streams line by line; on failure the npm output and error are shown.
-- Bridge restarts automatically after a successful update.
+- Bridge restarts automatically after a successful update (relaunch the app on iOS).
 
 **Remote: session rename**
 
@@ -448,8 +378,6 @@ New UI design, pi update in the app, remote session rename, and various fixes.
 **Fixes**
 
 - Remote connect bar no longer auto-connects on host dropdown change.
-- `npm install` on the phone now uses `node npm-cli.js` instead of the Termux
-  shell-script npm wrapper (which has a Termux-specific shebang and fails in-app).
 - Status code `2` (tar/npm exit code) no longer crashes the HTTP server.
 - Node >= 22.19.0 required (matches upstream `pi-coding-agent` / `pi-durable`).
 
@@ -475,7 +403,7 @@ Hardening and correctness pass for remote provisioning.
   failed start. PID-targeted shutdown replaces global `pkill`.
 - A live socket is additionally verified through `sessions.list`; unhealthy
   daemons are restarted.
-- Failed `ssh-copy-id` no longer silently proceeds to reconnect.
+- Failed key install no longer silently proceeds to reconnect.
 - Cancelling a Remote connection invalidates an in-flight provisioning result.
 - Adds basic Node-version, target-validation and release-hash tests.
 
@@ -483,8 +411,6 @@ Hardening and correctness pass for remote provisioning.
 
 Hosts are now prepared automatically when connecting remotely. Details:
 [Remote host setup](#remote-host-setup-automatic).
-
-**Remote host setup**
 
 - **pi-serverd installation.** Connecting from the Remote page checks the host
   over SSH; without a running daemon the server files are copied to
@@ -501,8 +427,8 @@ Hosts are now prepared automatically when connecting remotely. Details:
 - **auth.json.** A host without `~/.pi/agent/auth.json` gets the phone's file
   only after a red warning dialog and consent (mode 600). Without credentials the
   remote daemon answered every prompt with *Internal server error*.
-- **SSH key.** A host that rejects the phone's key offers `ssh-copy-id` in the
-  terminal and then reconnects (Remote page) or continues (terminal).
+- **SSH key.** A host that rejects the phone's key offers an interactive key
+  install and then reconnects (Remote page) or continues (terminal).
 - **Node from version managers.** Remote commands source nvm/fnm/Volta/asdf paths;
   Node installed through them was reported as missing before.
 - The Remote page connect button turns into **disconnect** while connected.
@@ -512,15 +438,9 @@ Hosts are now prepared automatically when connecting remotely. Details:
 - The terminal registered another key handler on every reconnect, which would
   send input twice.
 
-**Notes**
-
-- Node.js >= 22.19.0 + npm on the host are still required and are not installed.
-- `RUNTIME_VERSION` 45; the new `remote-provision.mjs` is part of the runtime
-  archive (see *Repackaging assets*).
-
 ### 0.0.1 — 2026-10-04
 
-Lots of bugfixes around durable sessions, security and the Android service.
+Lots of bugfixes around durable sessions, security and the app service.
 
 **Security**
 
@@ -539,8 +459,6 @@ Lots of bugfixes around durable sessions, security and the Android service.
 - `pi-serverd` keeps its state directory at `0700` and its socket at `0600`.
 - `auth.json` is written atomically under a lock file (bridge and pi-serverd),
   so a concurrent OAuth refresh cannot lose a rotated refresh token.
-- Cleartext HTTP is allowed only for `127.0.0.1`/`localhost`
-  (network security config instead of `usesCleartextTraffic`).
 - The remote host key fingerprint is shown on connect (trust on first use).
 
 **Durable sessions**
@@ -568,17 +486,16 @@ Lots of bugfixes around durable sessions, security and the Android service.
 - One storage owner: `server.mjs`/`pi-serverd.mjs` take a lock file and stop an
   orphaned predecessor; both close the harness on `SIGTERM`.
 
-**Android**
+**App shell**
 
 - Opening the app no longer restarts the running bridge (which interrupted
-  running tool calls and briefly opened the database twice). The service runs
-  exactly one node process, restarts it with backoff if it dies, and stops it
-  with `SIGTERM` + grace period.
-- One non-reference-counted wake lock instead of one per start.
+  running tool calls and briefly opened the database twice). Exactly one
+  bridge process runs; a crash is restarted with backoff and a stop sends
+  `SIGTERM` + grace period.
 - Runtime archives are streamed into `tar` (no temporary 170 MB copy); an
-  upgrade replaces `usr/` and `runtime/` completely, user data in `home/` and
-  `work/` is kept. `RUNTIME_VERSION` 43.
-- Node log rotation; longer first-start wait in the WebView.
+  upgrade replaces the runtime tree completely, user data in `home/` and
+  `work/` is kept.
+- Node log rotation; longer first-start wait in the UI.
 
 **UI**
 
@@ -599,39 +516,37 @@ Lots of bugfixes around durable sessions, security and the Android service.
 - `start_server.sh` now actually passes `PI_WORKDIR` to pi-serverd (it was set
   as an unexported shell variable).
 
-## Device test report (0.0.1)
+## Device test report (0.0.1, Android-era)
 
-Tested on 2026-10-04, upgrading an installed 0.1.0 build (runtime 42) in place. Remote host: Fedora with OpenSSH, reached over Wi-Fi with the phone's Termux OpenSSH.
+Historical record from the Android app; the durable-session behaviors it
+verifies still apply. Tested on 2026-10-04, upgrading an installed 0.1.0 build
+(runtime 42) in place. Remote host: Fedora with OpenSSH, reached over Wi-Fi
+with the phone's Termux OpenSSH.
 
 | Test | Result |
 |---|---|
-| Upgrade runtime 42 → 43 | ✅ toybox `tar` reads from stdin, done in ~13 s; `usr/` and `runtime/` replaced, credentials and sessions kept |
+| Upgrade runtime 42 → 43 | ✅ toybox `tar` reads from stdin, done in ~13 s; runtime replaced, credentials and sessions kept |
 | Legacy `sessions.json` | ✅ imported into the durable registry; "Main" and the active session kept |
 | `GET /vendor`, foreign `Host`, missing token | ✅ bridge keeps running / 421 / 401 |
 | Model choice + real prompt | ✅ `claude-haiku-4-5` stays selected after the prompt, answer "pong" |
 | Same `requestId` sent twice | ✅ one submission |
 | Activity recreated 3× (`onCreate`) | ✅ node keeps the same PID, no bridge restart |
 | Agent kills its own bridge during a bash call | ✅ supervisor restarts node after ~1 s, `resume()` continues the run, bash returns `interrupted`, the model answers |
-| WebView UI | ✅ loads over `127.0.0.1` with the network security config; tool line, usage and menu work |
+| WebView UI | ✅ loads over `127.0.0.1`; tool line, usage and menu work |
 | Remote over Termux OpenSSH | ✅ tunnel socket `0600` in a `0700` directory, host key fingerprint matches the host, daemon socket `0600` |
 | Phone's sshd session killed | ✅ status `reconnecting`, reconnected after ~2 s, retried prompt runs exactly once |
 | Remote page in the app | ✅ host selected, session attached with full history, model and usage shown |
-
-Not tested on the device: the service's own `SIGTERM` stop path
-(`onDestroy`), which cannot be triggered from outside for a non-exported
-service.
 
 ---
 
 *vibe coding fun with pi* — [Earendil Pi on GitHub](https://github.com/earendil-works/pi)
 
-The Spaces page prepares a P-256 device key in Android Keystore, pairs via an
-entered token/QR JSON, checks pairing/authentication and resolves own-key
-rotation. It connects to explicitly trusted control/data hosts over the overlay
-and displays the selected space's objects and statistics. Private keys are never
-exported; request identities and public metadata are saved privately before
-sending, without persisting enrollment tokens. Camera QR scanning and the live
-Keystore/phone-to-server acceptance remain pending.
+The Spaces page prepares a P-256 device key, pairs via an entered token/QR
+JSON, checks pairing/authentication and resolves own-key rotation. It connects
+to explicitly trusted control/data hosts over the overlay and displays the
+selected space's objects and statistics. Request identities and public
+metadata are saved privately before sending, without persisting enrollment
+tokens. Camera QR scanning remains pending.
 
 `PI_SERVERD_FEDERATION_CONFIG` opts pi-serverd into the provisioned federation
 runtime, independent boot/authority checks and its supervisor. Configuration,
@@ -640,6 +555,6 @@ keys and register endpoints must be provisioned explicitly. A persistent
 recovery integration are documented in the sibling pi-spaces
 `docs/ap1b-betrieb.md` and `docs/ap1b-abnahme.md`.
 
-Mobile lifecycle checks: `node --test test/spaces-mobile.test.mjs`.
+Mobile lifecycle checks run as part of `cd runtime && npm test`.
 
 The **Spaces-Steuerung** page (`runtime/public/spacectl.html`) sends admin commands (runs, workers) through the paired control connection. Each command ID is stored in the private profile before it is sent and is reused after a timeout, double tap or restart; results are polled only while the page is visible.

@@ -10,8 +10,8 @@ import os
 ///   work/     default agent working directory
 ///   tmp/      TMPDIR
 ///
-/// There is no termux rootfs on iOS: the Node engine is linked into the app
-/// and no external binaries are exec'd. home/ and work/ (user data) are never
+/// No external binaries are exec'd on iOS: the Node engine is linked into the
+/// app. home/ and work/ (user data) are never
 /// touched by reinstalls; runtime/ is replaced as a whole so files removed
 /// from a newer bundle do not linger.
 enum RuntimeInstaller {

@@ -69,10 +69,9 @@ function parseTarget(host) {
   return { username: user, hostname: at >= 0 ? host.slice(at + 1) : host };
 }
 
-function connect({ host, port, home, signal }) {
+function connect({ host, port, home, signal, password }) {
   const { username, hostname } = parseTarget(host);
   const keyPath = path.join(home, '.ssh', 'id_ed25519');
-  const privateKey = readFileSync(keyPath, 'utf8');
   const pattern = knownHostsPattern(host, port);
   return new Promise((resolve, reject) => {
     const conn = new Client();
@@ -83,7 +82,11 @@ function connect({ host, port, home, signal }) {
       host: hostname,
       port: port || 22,
       username,
-      privateKey,
+      // password auth serves the key-install flow (ssh-copy-id.mjs): the host
+      // does not accept the device key yet, so it may not even exist here
+      ...(password === undefined
+        ? { privateKey: readFileSync(keyPath, 'utf8') }
+        : { password }),
       keepalive: { interval: 15, countMax: 3 },
       readyTimeout: 15_000,
       // accept-new: unknown host → store and accept; known-but-different → refuse
@@ -106,8 +109,9 @@ export const jsSshBackend = {
 
   /** Same process semantics as the spawn backend: bounded, tail-trimmed
    * output, line callbacks, and stdin write failures must not crash the
-   * caller with an unhandled event. */
-  run({ home, host, port, command, stdin, onLine, timeoutMs = 60_000, signal }) {
+   * caller with an unhandled event. `password` is a JS-backend-only extension
+   * (no spawn equivalent) used by the key-install flow. */
+  run({ home, host, port, command, stdin, onLine, timeoutMs = 60_000, signal, password }) {
     return withDeadline((bounded) => new Promise((resolve, reject) => {
       let conn;
       const capture = sshOutputCapture(onLine);
@@ -121,10 +125,13 @@ export const jsSshBackend = {
       };
       const onAbort = () => finish(bounded.reason);
       bounded.addEventListener('abort', onAbort, { once: true });
-      connect({ host, port, home, signal: bounded })
+      connect({ host, port, home, signal: bounded, password })
         .then((c) => {
           if (done) { c.end(); return; }
           conn = c;
+          // post-ready failures (network drop, keepalive timeout) must resolve
+          // the run instead of crashing on an unhandled 'error' event
+          conn.on('error', (e) => finish(e));
           conn.exec(command, (execErr, stream) => {
             if (execErr) return finish(execErr);
             stream.on('data', capture.stdout);
@@ -145,6 +152,30 @@ export const jsSshBackend = {
   },
 
   runStrict: sshRunStrict,
+
+  /** Interactive remote command on a pty (the terminal's ssh path): iOS
+   * cannot spawn `script`, so the pty is the SSH channel itself — exec with a
+   * pty-req, the wire equivalent of `ssh -tt host command`. The handle owns
+   * its connection: kill() tears it down, and the stream emits 'close' when
+   * the remote side (or the connection) ends. */
+  openShell({ home, host, port, command, cols, rows }) {
+    return new Promise((resolve, reject) => {
+      connect({ host, port, home })
+        .then((conn) => {
+          conn.exec(command, { pty: { term: 'xterm-256color', cols, rows } }, (err, stream) => {
+            if (err) { try { conn.end(); } catch {} reject(err); return; }
+            // a dropped connection must end the channel, not just the socket
+            conn.on('close', () => { try { stream.close(); } catch {} });
+            conn.on('error', () => {}); // surfaced through 'close' above
+            resolve({
+              stream,
+              kill: () => { try { conn.end(); } catch {} },
+            });
+          });
+        })
+        .catch(reject);
+    });
+  },
 
   /** SHA256:… host-key fingerprint from the known_hosts file, or null. */
   async fingerprint({ home, host, port }) {
@@ -194,7 +225,10 @@ export const jsSshBackend = {
     ready.catch(die);
     // the no-op catch: a handshake losing the race with kill() must not
     // surface as an unhandled rejection — die() already reported the exit
-    ready.then((c) => c.on('close', () => die(new Error('ssh connection closed')))).catch(() => {});
+    ready.then((c) => {
+      c.on('error', die); // an unhandled Client 'error' event would crash the bridge
+      c.on('close', () => die(new Error('ssh connection closed')));
+    }).catch(() => {});
     server = net.createServer((socket) => {
       sockets.add(socket);
       socket.once('close', () => sockets.delete(socket));

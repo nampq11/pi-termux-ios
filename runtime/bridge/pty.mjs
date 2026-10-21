@@ -1,9 +1,13 @@
 // bridge/pty.mjs — interactive pi CLI over WebSocket + util-linux `script`.
+// On the pure-JS backend (iOS: no binaries to spawn) the SSH channel itself
+// is the pty for remote sessions; the local CLI path stays spawn-based and is
+// unreachable on iOS (exec() is denied there).
 import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
 import { remoteBash } from '../remote-provision.mjs';
 import { parseSshTarget } from '../remote-client.mjs';
+import { sshBackend } from '../ssh-transport.mjs';
 
 const clampInt = (v, lo, hi, dflt) => {
   const n = Math.trunc(Number(v));
@@ -33,6 +37,58 @@ const REMOTE_PI_SCRIPT = [
 // single-quoted for the local `sh -c`: the base64 payload has no quote characters
 const REMOTE_PI_CMD = `'${remoteBash(REMOTE_PI_SCRIPT)}'`;
 
+/** Bridge the WebSocket to an SSH channel pty (JS backends). Keystrokes
+ * arriving during the SSH handshake are queued so they cannot vanish; \x01
+ * control frames become setWindow resizes, everything else is stdin. */
+async function startSshChannelPty(ws, { target, command, cols, rows }) {
+  let handle = null;
+  let wsClosed = false;
+  // covers a close during the handshake too: handle is still null then, so the
+  // flag lets the just-resolved openShell kill itself below
+  ws.on('close', () => { wsClosed = true; handle?.kill(); });
+  const queued = [];
+  const collect = (d) => queued.push(d);
+  ws.on('message', collect);
+  try {
+    handle = await sshBackend().openShell({
+      home: process.env.HOME || '/tmp',
+      host: target.host,
+      port: target.port,
+      command,
+      cols,
+      rows,
+    });
+    ws.removeListener('message', collect);
+    if (wsClosed) { handle.kill(); return; } // no consumer will ever read the stream
+    const { stream } = handle;
+    stream.on('data', (d) => { if (ws.readyState === 1) ws.send(d); });
+    stream.stderr.on('data', (d) => { if (ws.readyState === 1) ws.send(d); });
+    stream.on('error', (e) => { if (ws.readyState === 1) ws.send(`\r\n[ssh error] ${e?.message || e}\r\n`); });
+    stream.on('close', () => { try { ws.close(1000, 'pty exited'); } catch {} });
+    const deliver = (data) => {
+      const s = data.toString();
+      if (s.charCodeAt(0) === 1) {
+        try {
+          const msg = JSON.parse(s.slice(1));
+          if (msg.resize) {
+            stream.setWindow(clampInt(msg.resize.rows, 5, 500, rows), clampInt(msg.resize.cols, 10, 1000, cols), 0, 0);
+          }
+        } catch {}
+        return;
+      }
+      try { stream.write(data); } catch {} // a half-dead channel must not throw into the ws
+    };
+    for (const d of queued) deliver(d);
+    ws.on('message', deliver);
+  } catch (e) {
+    ws.removeListener('message', collect);
+    try {
+      if (ws.readyState === 1) ws.send(`\r\n[ssh error] ${e?.message || e}\r\n`);
+      ws.close(1011, 'ssh failed');
+    } catch {}
+  }
+}
+
 export function createPtyHandler({ root, prefix, workDir }) {
   const cli = path.join(root, 'node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js');
   return function startPty(ws, url) {
@@ -41,6 +97,20 @@ export function createPtyHandler({ root, prefix, workDir }) {
     const scriptBin = prefix && existsSync(`${prefix}/bin/script`) ? `${prefix}/bin/script` : 'script';
     const sshParam = url.searchParams.get('ssh');
     const sshCmd = url.searchParams.get('sshop'); // 'copyid' -> interactive ssh-copy-id
+    if (sshParam && sshBackend().name === 'js') {
+      // key install has its own password flow on JS backends (ssh-copy-id.mjs)
+      if (sshCmd === 'copyid') {
+        try {
+          if (ws.readyState === 1) ws.send('\r\n[key install runs through the ⇧key password prompt on this device]\r\n');
+          ws.close(1008, 'use the password flow');
+        } catch {}
+        return;
+      }
+      let target;
+      try { target = parseSshTarget(sshParam); } catch (e) { ws.close(1008, e.message); return; }
+      startSshChannelPty(ws, { target, command: remoteBash(REMOTE_PI_SCRIPT), cols, rows });
+      return;
+    }
     let inner;
     if (sshParam) {
       let target;

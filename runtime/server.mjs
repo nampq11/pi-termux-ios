@@ -251,7 +251,7 @@ let bootFailed = false;
 try {
   await initHarness();
 } catch (e) {
-  // a bridge without a harness is useless: exit so PiService restarts it with backoff
+  // a bridge without a harness is useless: exit so the supervisor restarts it with backoff
   console.error('initHarness:', e?.stack || e);
   try { await harness.close(ctx); } catch {}
   releaseLock();

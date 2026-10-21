@@ -4,12 +4,10 @@ import os
 
 /// Starts the embedded Node.js engine for the HTTP/SSE/WS bridge.
 ///
-/// iOS apps cannot exec external binaries, so unlike the Android app there is
-/// no `node` child process: `server.mjs` runs inside the app process on a
-/// dedicated thread. nodejs-mobile allows exactly one engine instance per
-/// process and it can never be restarted, so the supervisor/restart logic of
-/// the Android PiService has no equivalent here — a crashed engine needs an
-/// app relaunch.
+/// iOS apps cannot exec external binaries, so there is no `node` child
+/// process: `server.mjs` runs inside the app process on a dedicated thread.
+/// nodejs-mobile allows exactly one engine instance per process and it can
+/// never be restarted — a crashed engine needs an app relaunch.
 enum NodeEngine {
 
     private static let log = Logger(subsystem: "org.pimobile.app", category: "engine")
@@ -44,7 +42,7 @@ enum NodeEngine {
     /// - Parameters:
     ///   - script: absolute path to `server.mjs`.
     ///   - environment: environment variables applied via `setenv` before the
-    ///     engine starts (HOME, PI_WORKDIR, … — mirrors PiService.startNode).
+    ///     engine starts (HOME, PI_WORKDIR, …).
     static func launch(script: String, environment: [String: String]) {
         redirectOutput()
         log.info("engine: launching node for \(script, privacy: .public)")

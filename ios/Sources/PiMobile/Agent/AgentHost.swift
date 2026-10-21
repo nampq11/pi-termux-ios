@@ -67,6 +67,13 @@ public final class AgentHost: NSObject, ASWebAuthenticationPresentationContextPr
         progress = []
     }
 
+    /// Shows a follow-up prompt during a running login without resetting
+    /// its device code or progress.
+    public func showPrompt(_ prompt: Prompt, onAnswer: ((String?) -> Void)? = nil) {
+        self.prompt = prompt
+        self.promptReply = onAnswer
+    }
+
     public func endLogin() {
         answerPrompt(nil)
         closeAuthSession()
