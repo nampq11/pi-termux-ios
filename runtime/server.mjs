@@ -437,12 +437,19 @@ async function handleApi(req, res, url, p) {
   if (p === '/api/sessions/delete' && req.method === 'POST') {
     const id = str(body.id);
     if (!(await sessions.get(id))) return json(res, 404, { error: 'unknown session' });
-    if (id === String(active.id)) return json(res, 400, { error: 'select another session first' });
     // stop its work first: a hidden session must not keep running tools
     const conversation = await harness.conversation(Number(id), ctx);
     if (conversation) await conversation.abort(ctx);
     await sessions.remove(id); // transcript stays in SQLite
-    return json(res, 200, { ok: true });
+    // deleting the shown session must leave the chat page on a live one
+    // Main (the root conversation) is the guaranteed landing spot; if the
+    // deleted session was Main itself, re-register it so the list keeps it.
+    if (id === String(active.id)) {
+      const root = await harness.root(ctx);
+      await sessions.register(root.id, { name: 'Main' });
+      await activate(root);
+    }
+    return json(res, 200, { ok: true, activeId: String(active.id) });
   }
 
   // --- active conversation

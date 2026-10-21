@@ -50,13 +50,11 @@ async function load() {
       const r = await post(API.sessionRename, { id: session.id, name: next });
       if (r.ok) load(); else msg.textContent = `error: ${r.error}`;
     }));
-    if (session.id !== data.activeId) {
-      row.append(button('✕', 'Stop and remove from session list (transcript is kept)', async () => {
-        if (!confirm(`Stop and remove ${label}?`)) return;
-        const r = await post(API.sessionDelete, { id: session.id });
-        if (r.ok) load(); else msg.textContent = `error: ${r.error}`;
-      }, 'key-del'));
-    }
+    row.append(button('✕', 'Stop and remove from session list (transcript is kept)', async () => {
+      if (!confirm(`Stop and remove ${label}?`)) return;
+      const r = await post(API.sessionDelete, { id: session.id });
+      if (r.ok) load(); else msg.textContent = `error: ${r.error}`;
+    }, 'key-del'));
     list.append(row);
   }
   if (!list.children.length) list.innerHTML = '<div class="key-empty">no sessions</div>';
