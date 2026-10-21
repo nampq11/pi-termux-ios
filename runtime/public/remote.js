@@ -1,8 +1,9 @@
 import { authUrl, getJson, initApi, postJson } from './api.js';
-import { API } from './constants.js';
 import { askCopyAuth, askInstallKey, askTrustHost, askUpdate } from './authprompt.js';
+import { wireComposer } from './composer.js';
+import { API } from './constants.js';
 import { renderMenu } from './menu.js';
-import { newRequestId, Transcript, usageText } from './transcript.js';
+import { Transcript, usageText } from './transcript.js';
 
 const token = renderMenu();
 initApi(token);
@@ -313,18 +314,14 @@ btnCompact.addEventListener('click', async () => {
   if (r.error) transcript.sys(`error: ${r.error}`);
 });
 
-composer.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  const pending = transcript.addPendingUser(text);
-  // one requestId for every retry: a prompt the server already accepted
-  // before the tunnel dropped is not run a second time
-  const body = { message: text, requestId: newRequestId() };
-  if (busy && steerBox.checked) body.whenBusy = 'steer';
-  const r = await postJson(API.remotePrompt, body, { retries: 10 });
-  if (r.error) transcript.failPending(pending, r.error);
+wireComposer({
+  form: composer,
+  input,
+  transcript,
+  steerBox,
+  isBusy: () => busy,
+  endpoint: API.remotePrompt,
+  retries: 10, // the ssh tunnel can drop mid-prompt; the requestId keeps retries exactly-once
 });
 
 loadHosts().then(() => {

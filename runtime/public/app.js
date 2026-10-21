@@ -1,7 +1,8 @@
 import { authUrl, getJson, initApi, postJson } from './api.js';
+import { wireComposer } from './composer.js';
 import { API } from './constants.js';
 import { renderMenu } from './menu.js';
-import { newRequestId, Transcript, usageText } from './transcript.js';
+import { Transcript, usageText } from './transcript.js';
 
 initApi(renderMenu());
 
@@ -57,19 +58,14 @@ function connect() {
 
 // --- composer: requestId makes a retried prompt exactly-once ------------------
 
-document.getElementById('composer').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  const pending = transcript.addPendingUser(text);
-  const body = { message: text, requestId: newRequestId() };
-  if (busy && steerBox.checked) body.whenBusy = 'steer';
-  const r = await postJson(API.prompt, body, { retries: 3 });
-  if (r.error) transcript.failPending(pending, r.error);
-});
-input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) document.getElementById('composer').requestSubmit();
+wireComposer({
+  form: document.getElementById('composer'),
+  input,
+  transcript,
+  steerBox,
+  isBusy: () => busy,
+  endpoint: API.prompt,
+  retries: 3,
 });
 
 // --- model picker ------------------------------------------------------------
