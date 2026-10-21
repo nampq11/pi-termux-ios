@@ -3,6 +3,7 @@
 import hashlib
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 import sys
@@ -12,7 +13,10 @@ SOURCE = Path(os.environ.get('PI_SPACES_SOURCE', str(ROOT.parent / 'pi-spaces'))
 RUNTIME = ROOT / 'runtime'
 
 # Files that make up the mobile runtime payload (same set on both platforms).
-FILES = ['server.mjs', 'common.mjs', 'fileio.mjs', 'session-ops.mjs', 'semver.mjs', 'remote-env.mjs', 'env-server.mjs',
+FILES = ['server.mjs', 'bridge/http.mjs', 'bridge/sse.mjs', 'bridge/pty.mjs',
+         'bridge/routes/system.mjs', 'bridge/routes/sessions.mjs', 'bridge/routes/ssh.mjs',
+         'bridge/routes/remote.mjs', 'bridge/routes/accounts.mjs',
+         'common.mjs', 'fileio.mjs', 'session-ops.mjs', 'semver.mjs', 'remote-env.mjs', 'env-server.mjs',
          'pi-serverd.mjs', 'serverd-tcp.mjs', 'space-keystore.mjs', 'spaces-mobile.mjs',
          'remote-client.mjs', 'remote-provision.mjs', 'remote-state.mjs', 'ssh-transport.mjs',
          'ssh-js-backend.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json', 'public',
@@ -38,7 +42,7 @@ def import_closure(entry):
             continue  # reported as missing by the manifest set difference
         for match in _RELATIVE_IMPORT_RE.findall(text):
             spec = match[0] or match[1]
-            stack.append(spec[2:])  # strip the leading './'
+            stack.append(posixpath.normpath(posixpath.join(posixpath.dirname(name), spec)))
     seen.discard(entry)
     return seen
 

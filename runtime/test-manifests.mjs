@@ -28,7 +28,10 @@ function importClosure(entry) {
     } catch {
       continue; // reported as missing by the manifest membership assertion
     }
-    for (const m of text.matchAll(RELATIVE_IMPORT)) stack.push((m[1] || m[2]).slice(2));
+    for (const m of text.matchAll(RELATIVE_IMPORT)) {
+      const spec = m[1] || m[2];
+      stack.push(path.posix.normalize(path.posix.join(path.posix.dirname(name), spec)));
+    }
   }
   seen.delete(entry);
   return seen;
