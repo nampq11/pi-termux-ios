@@ -12,10 +12,11 @@ SOURCE = Path(os.environ.get('PI_SPACES_SOURCE', str(ROOT.parent / 'pi-spaces'))
 RUNTIME = ROOT / 'runtime'
 
 # Files that make up the mobile runtime payload (same set on both platforms).
-FILES = ['server.mjs', 'common.mjs', 'remote-env.mjs', 'env-server.mjs', 'pi-serverd.mjs',
-         'serverd-tcp.mjs', 'space-keystore.mjs', 'spaces-mobile.mjs', 'remote-client.mjs',
-         'remote-provision.mjs', 'remote-state.mjs', 'ssh-transport.mjs', 'ssh-js-backend.mjs',
-         'pi-spaces.mjs', 'package.json', 'package-lock.json', 'public', 'node_modules']
+FILES = ['server.mjs', 'common.mjs', 'fileio.mjs', 'remote-env.mjs', 'env-server.mjs',
+         'pi-serverd.mjs', 'serverd-tcp.mjs', 'space-keystore.mjs', 'spaces-mobile.mjs',
+         'remote-client.mjs', 'remote-provision.mjs', 'remote-state.mjs', 'ssh-transport.mjs',
+         'ssh-js-backend.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json', 'public',
+         'node_modules']
 
 # Static relative imports (`from './x.mjs'`, `import './x.mjs'`); dynamic
 # import() and bare specifiers (node_modules) are out of scope by design.

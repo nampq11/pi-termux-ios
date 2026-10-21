@@ -22,10 +22,10 @@ import { createRemoteState } from './remote-state.mjs';
 import { copyAuthTo, probeRemote, remoteBash, runtimeHash, stopRemoteServer } from './remote-provision.mjs';
 import { setSshBackend, sshBackend } from './ssh-transport.mjs';
 import { jsSshBackend } from './ssh-js-backend.mjs';
+import { acquireOwnerLock, readJson, writeFileAtomic } from './fileio.mjs';
 import {
-  acquireOwnerLock, agentOf, createCredentialStore, createModelCatalog, ensureModel, isBusy,
-  openHarness, pickModel, readJson, requestIdOf, sessionStore, Subagent, whenBusyOf,
-  writeFileAtomic,
+  agentOf, createCredentialStore, createModelCatalog, ensureModel, isBusy,
+  openHarness, pickModel, requestIdOf, sessionStore, Subagent, whenBusyOf,
 } from './common.mjs';
 
 const ctx = BACKGROUND_CONTEXT;

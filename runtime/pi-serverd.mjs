@@ -20,10 +20,11 @@ import { createUnixListener } from '@earendil-works/pi-server/unix';
 import { Server, SessionNotFoundError } from '@earendil-works/pi-server';
 import { createTcpListener } from './serverd-tcp.mjs';
 import { SpaceService, StaticIdentity, withSpaceService, startConfiguredFederation, spaces as Spaces, startService as startSpaceService } from './pi-spaces.mjs';
+import { acquireOwnerLock, readJson, writeFileAtomic } from './fileio.mjs';
 import {
-  acquireOwnerLock, createCredentialStore, createModelCatalog,
-  ensureModel, isBusy, openHarness, pickModel, readJson, requestIdOf, sessionStore, Subagent,
-  whenBusyOf, writeFileAtomic,
+  createCredentialStore, createModelCatalog,
+  ensureModel, isBusy, openHarness, pickModel, requestIdOf, sessionStore, Subagent,
+  whenBusyOf,
 } from './common.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
