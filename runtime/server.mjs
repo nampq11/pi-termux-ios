@@ -43,6 +43,7 @@ const IOS = process.env.PI_PLATFORM === 'ios';
 // the OpenSSH binary every other platform uses.
 if (IOS) setSshBackend(jsSshBackend);
 const FATAL_FILE = path.join(STATE_DIR, 'fatal');
+const PORT_FILE = path.join(STATE_DIR, 'port');
 if (IOS) {
   // last-resort guard before anything else runs: an uncaught exception during
   // module init would kill the whole app (the engine runs in-process and
@@ -57,7 +58,6 @@ if (IOS) {
   });
 }
 const mobileSpaces = new MobileSpaces(path.join(STATE_DIR, 'space-profile.json'));
-const PORT_FILE = path.join(STATE_DIR, 'port');
 const TOKEN_FILE = path.join(STATE_DIR, 'token');
 const LEGACY_SESSIONS_FILE = path.join(STATE_DIR, 'sessions.json');
 const DEVICE_ID_FILE = path.join(STATE_DIR, 'device-id');

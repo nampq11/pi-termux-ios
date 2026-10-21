@@ -1,9 +1,8 @@
 // SSH Unix-socket bridge. Private sockets keep other phone apps out of the
 // unauthenticated pi-server protocol; SSH authenticates the remote peer.
 import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
-import { sshBackend, withDeadline, sshBaseOptions } from './ssh-transport.mjs';
+import { sshBackend, withDeadline } from './ssh-transport.mjs';
 
-export { withDeadline, sshBaseOptions } from './ssh-transport.mjs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import os from 'node:os';
 import crypto from 'node:crypto';

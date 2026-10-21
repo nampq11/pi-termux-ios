@@ -7,8 +7,8 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { attachRemote, parseSshTarget, withDeadline } from './remote-client.mjs';
-import { sshBackend } from './ssh-transport.mjs';
+import { attachRemote, parseSshTarget } from './remote-client.mjs';
+import { sshBackend, withDeadline } from './ssh-transport.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 export const REMOTE_FILES = ['pi-serverd.mjs', 'serverd-tcp.mjs', 'common.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json'];

@@ -239,8 +239,6 @@ export const jsSshBackend = {
     };
   },
 };
-function withDeadlineJs(operation, options) { return withDeadline(operation, options); }
-
 /** Write an ed25519 keypair in OpenSSH format without shelling out to
  * ssh-keygen. node:crypto gives the raw seed/public via JWK; the rest is the
  * openssh-key-v1 wire container, byte-compatible with what ssh-keygen -t
