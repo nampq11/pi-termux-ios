@@ -50,10 +50,20 @@ struct RemoteView: View {
             .navigationTitle("Remote")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        haptic()
+                        model.showSidebar = true
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .accessibilityLabel("Open workspaces drawer")
+                }
                 ToolbarItem(placement: .principal) {
                     hostTitleButton(remote)
                 }
-                ToolbarItemGroup(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     if remote.connected || remote.connecting {
                         Button {
                             haptic()
@@ -66,10 +76,19 @@ struct RemoteView: View {
                             }
                         } label: {
                             Text(remote.connecting ? "Cancel" : "Disconnect")
-                                .font(.subheadline.weight(.semibold))
+                                .font(.footnote.weight(.semibold))
                                 .foregroundStyle(remote.connected ? .red : .primary)
                         }
                     }
+                    Button {
+                        haptic()
+                        model.showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    .accessibilityLabel("Settings & Tools")
+
                     sessionMenu(remote)
                 }
             }
@@ -232,48 +251,56 @@ struct RemoteView: View {
 
     private func hostTitleButton(_ remote: RemoteModel) -> some View {
         Menu {
-            ForEach(model.clients.hosts) { host in
+            Section("Environment") {
                 Button {
-                    if remote.connected || remote.connecting {
-                        Task { await remote.disconnectHost() }
-                    }
-                    selectedTarget = host.target
+                    model.switchEnvironment(.local)
                 } label: {
-                    if host.target == selectedTarget {
-                        Label(host.name, systemImage: "checkmark")
-                    } else {
-                        Text(host.name)
+                    Label("On-Device (Local)", systemImage: "")
+                }
+                ForEach(model.clients.hosts) { host in
+                    Button {
+                        if selectedTarget != host.target {
+                            if remote.connected || remote.connecting {
+                                Task { await remote.disconnectHost() }
+                            }
+                            selectedTarget = host.target
+                            model.switchEnvironment(.remote(target: host.target))
+                        }
+                    } label: {
+                        if host.target == selectedTarget {
+                            Label(host.name, systemImage: "checkmark")
+                        } else {
+                            Text(host.name)
+                        }
                     }
                 }
             }
         } label: {
-            VStack(spacing: 1) {
-                HStack(spacing: 4) {
-                    Text(selectedTarget.map(basename) ?? "Host")
-                        .font(.headline)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                    if remote.connected {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 7, height: 7)
-                    }
-                }
-                if let attachedId = remote.attachedId {
-                    Text("Session \(attachedId)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+            HStack(spacing: 5) {
+                Text("🖥️ \(selectedTarget.map(basename) ?? "Remote")")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.blue)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.blue.opacity(0.12), in: Capsule())
+
+                Text(remote.sessions.first { $0.id == remote.attachedId }?.label ?? "Remote")
+                    .font(.headline)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                if remote.connected {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 7, height: 7)
                 }
             }
-            .frame(maxWidth: 200)
+            .frame(maxWidth: 220)
         }
         .tint(.primary)
-        .accessibilityLabel("Select remote host")
+        .accessibilityLabel("Select environment")
     }
-
     private func sessionMenu(_ remote: RemoteModel) -> some View {
         Menu {
             Section("Sessions") {

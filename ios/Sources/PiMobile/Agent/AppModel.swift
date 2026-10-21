@@ -46,6 +46,35 @@ public final class AppModel {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
+
+    public enum AppEnvironment: Hashable, Sendable {
+        case local
+        case remote(target: String)
+
+        public var isLocal: Bool {
+            if case .local = self { return true }
+            return false
+        }
+    }
+
+    public var currentEnvironment: AppEnvironment = .local
+    public var showSettings = false
+    public var showSidebar = false
+
+    public func switchEnvironment(_ env: AppEnvironment) {
+        haptic()
+        currentEnvironment = env
+        if case .remote(let target) = env {
+            if remote.connected || remote.connecting {
+                Task {
+                    await remote.disconnectHost()
+                    await remote.connectHost(target)
+                }
+            } else {
+                Task { await remote.connectHost(target) }
+            }
+        }
+    }
     public let api = BridgeAPI()
 
     @ObservationIgnored private var sseTask: Task<Void, Never>?

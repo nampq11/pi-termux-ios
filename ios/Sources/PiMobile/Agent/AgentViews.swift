@@ -81,10 +81,20 @@ public struct AgentView: View {
             .navigationTitle(state.current?.displayTitle ?? "Agent")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        haptic()
+                        model.showSidebar = true
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .accessibilityLabel("Open workspaces drawer")
+                }
                 ToolbarItem(placement: .principal) {
                     titleButton(state)
                 }
-                ToolbarItemGroup(placement: .primaryAction) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         haptic()
                         model.agentNewConversation()
@@ -93,6 +103,15 @@ public struct AgentView: View {
                             .font(.system(size: 16, weight: .semibold))
                     }
                     .accessibilityLabel("New conversation")
+
+                    Button {
+                        haptic()
+                        model.showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    .accessibilityLabel("Settings & Tools")
 
                     menu(state)
                 }
@@ -136,44 +155,61 @@ public struct AgentView: View {
         }
     }
 
-    /// The conversation's title button; opens the list of conversations.
+    /// The unified environment & conversation menu button.
     private func titleButton(_ state: AgentState) -> some View {
-        Button {
-            haptic()
-            model.agentListShown = true
-        } label: {
-            HStack(spacing: 6) {
-                VStack(spacing: 1) {
-                    HStack(spacing: 4) {
-                        Text(state.current?.displayTitle ?? "Agent")
-                            .font(.headline)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.secondary)
-                        if state.othersActive {
-                            Circle()
-                                .fill(Color.accentColor)
-                                .frame(width: 7, height: 7)
-                        }
+        Menu {
+            Section("Environment") {
+                Button {
+                    model.switchEnvironment(.local)
+                } label: {
+                    Label("On-Device (Local)", systemImage: model.currentEnvironment.isLocal ? "checkmark" : "")
+                }
+                ForEach(model.clients.hosts) { host in
+                    Button {
+                        model.switchEnvironment(.remote(target: host.target))
+                    } label: {
+                        Label(host.name, systemImage: "")
                     }
-                    Text(state.root.map(displayName) ?? "Local Workspace")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
             }
-            .frame(maxWidth: model.wide ? 360 : 200)
+            Section("Active Conversation") {
+                Button {
+                    haptic()
+                    model.agentListShown = true
+                } label: {
+                    Label("All Conversations…", systemImage: "list.bullet")
+                }
+                if let current = state.current, current.title != nil {
+                    Button { renaming = current } label: { Label("Rename…", systemImage: "pencil") }
+                    Button { model.agentArchive(current.id, true) } label: { Label("Archive", systemImage: "archivebox") }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text("📱 Local")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+
+                Text(state.current?.displayTitle ?? "Agent")
+                    .font(.headline)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: model.wide ? 360 : 220)
         }
         .tint(.primary)
-        .accessibilityLabel("Conversations")
+        .accessibilityLabel("Workspaces & Conversations")
     }
 
     private func scrollKey(_ state: AgentState) -> String {
         "\(state.items.count):\(state.items.last?.text.count ?? 0):\(state.items.last?.status ?? ""):\(state.status ?? ""):\(state.error ?? "")"
     }
 
-    @ViewBuilder
     private func intro(_ state: AgentState) -> some View {
         VStack(spacing: 24) {
             VStack(spacing: 12) {
