@@ -54,25 +54,23 @@ public final class BridgeAPI {
     }
 
     public func get<T>(_ path: String) async throws -> T {
-        let req = try request(path: path, method: "GET")
-        let (data, response) = try await urlSession.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 500
-            let str = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
-            throw NSError(domain: "Bridge", code: code, userInfo: [NSLocalizedDescriptionKey: str])
-        }
-        guard let result = try JSONSerialization.jsonObject(with: data) as? T else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
-        }
-        return result
+        try await send(try request(path: path, method: "GET"))
     }
 
     public func post<T>(_ path: String, body: [String: Any]) async throws -> T {
-        let req = try request(path: path, method: "POST", body: body)
+        try await send(try request(path: path, method: "POST", body: body))
+    }
+
+    private func send<T>(_ req: URLRequest) async throws -> T {
         let (data, response) = try await urlSession.data(for: req)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 500
-            let str = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
+            // Routes report failures as {"error": ...}; surface that text, not the raw JSON.
+            var str = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let err = obj["error"] as? String {
+                str = err
+            }
             throw NSError(domain: "Bridge", code: code, userInfo: [NSLocalizedDescriptionKey: str])
         }
         guard let result = try JSONSerialization.jsonObject(with: data) as? T else {

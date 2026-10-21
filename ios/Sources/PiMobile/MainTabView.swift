@@ -8,13 +8,16 @@ import SwiftUI
 struct MainTabView: View {
     @State private var selection = Tab.chat
 
-    enum Tab: Hashable { case chat, accounts }
+    enum Tab: Hashable { case chat, clients, accounts }
 
     var body: some View {
         TabView(selection: $selection) {
             AgentView()
                 .tabItem { Label("Chat", systemImage: "message.fill") }
                 .tag(Tab.chat)
+            ClientsView()
+                .tabItem { Label("Clients", systemImage: "rectangle.connected.to.line.below") }
+                .tag(Tab.clients)
             NavigationStack { AccountsView() }
                 .tabItem { Label("Accounts", systemImage: "key") }
                 .tag(Tab.accounts)
