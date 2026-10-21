@@ -18,9 +18,11 @@ const NAV = [
 // renderMenu() is called once per page and returns the session token.
 export function renderMenu() {
   // On iOS the Node engine runs in-process and child processes are denied:
-  // pages that depend on ssh/PTY are hidden. The server injects the flag.
+  // the local pi CLI terminal cannot run. Remote work speaks the pure-JS SSH
+  // backend, so Remote/Clients are fine; ssh terminals are reachable via
+  // Clients ▸_ and the sheet below. The server injects the flag.
   const ios = window.PI_MOBILE_IOS === 1;
-  const worksOnIos = (href) => !ios || !['/remote.html', '/terminal.html', '/clients.html'].includes(href);
+  const worksOnIos = (href) => !ios || href !== '/terminal.html';
   const token = new URLSearchParams(location.search).get('token')
     || localStorage.getItem('pi-token') || '';
   if (token) localStorage.setItem('pi-token', token);
@@ -66,7 +68,7 @@ export function renderMenu() {
       a.innerHTML = `<span class="nav-icon">${t.icon}</span>${t.label}`;
       sheet.appendChild(a);
     }
-    // SSH target option
+    // SSH target option (the JS backend carries ssh terminals on iOS)
     const sshA = document.createElement('a');
     sshA.href = '#';
     sshA.innerHTML = '<span class="nav-icon">⌁</span>pi CLI (ssh)…';
@@ -78,7 +80,7 @@ export function renderMenu() {
       localStorage.setItem('pi-ssh-target', target);
       location.href = `/terminal.html?token=${encodeURIComponent(token)}&ssh=${encodeURIComponent(target)}`;
     });
-    if (!ios) sheet.appendChild(sshA);
+    sheet.appendChild(sshA);
     const close = document.createElement('span');
     close.id = 'nav-sheet-close';
     close.textContent = '✕  close';

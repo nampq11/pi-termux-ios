@@ -1,6 +1,6 @@
 /* global Terminal, FitAddon */
 import { initApi, postJson } from './api.js';
-import { askCopyAuth, askInstallKey, askTrustHost } from './authprompt.js';
+import { askCopyAuth, askInstallKey, askTrustHost, installKeyWithPassword } from './authprompt.js';
 import { API } from './constants.js';
 import { renderMenu } from './menu.js';
 const token = renderMenu();
@@ -85,8 +85,13 @@ async function start() {
       term.write(`checking ${sshTarget}…\r\n`);
       const st = await postJson(API.remoteAuthStatus, { target: sshTarget });
       if (st.loginFailed) {
-        if (await askInstallKey(sshTarget)) { keyInstallRun = true; connect('copyid'); return; }
-        term.write('key not installed; ssh will ask for the password.\r\n');
+        // iOS has no PTY for interactive ssh-copy-id; the bridge installs the key with the password instead
+        if (window.PI_MOBILE_IOS === 1) {
+          term.write(await installKeyWithPassword(sshTarget)
+            ? 'key installed.\r\n'
+            : 'key not installed; use ⇧key on the Clients page and retry.\r\n');
+        } else if (await askInstallKey(sshTarget)) { keyInstallRun = true; connect('copyid'); return; }
+        else term.write('key not installed; ssh will ask for the password.\r\n');
       } else if (st.error) term.write(`[auth check failed: ${st.error}]\r\n`);
       else if (st.needsAuth) {
         let trusted = st.trusted;
