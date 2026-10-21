@@ -3,8 +3,8 @@ import Observation
 
 // Native port of spaces.js: device pairing (prepare, enroll with QR content
 // validated against the prepared identity) and space connection (dataHost),
-// with every reply shown as pretty JSON like the web result pane. Status and
-// error strings stay German like the web page (deliberate there).
+// with every reply shown as pretty JSON like the web result pane. The web
+// page's labels are German; the native app uses English throughout.
 
 @MainActor
 @Observable
@@ -26,7 +26,7 @@ public final class SpacesModel {
     public func call(_ action: String, body: [String: Any] = [:]) async -> [String: Any]? {
         guard let api else { return nil }
         running = true
-        message = "Läuft …"
+        message = "Running …"
         defer { running = false }
         do {
             let reply: [String: Any] = try await api.post("/api/spaces/\(action)", body: body)
@@ -38,7 +38,7 @@ public final class SpacesModel {
                let text = String(data: data, encoding: .utf8) {
                 result = text
             }
-            message = "Ergebnis empfangen"
+            message = "Result received"
             return reply
         } catch {
             message = error.localizedDescription
@@ -55,7 +55,7 @@ public final class SpacesModel {
             let data = value.data(using: .utf8)
             let qr = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any]
             guard let qr, let token = qr["token"] as? String else {
-                message = "Ungültiges QR-JSON"
+                message = "Invalid QR JSON"
                 return
             }
             guard let status = await call("status") else { return }
@@ -64,7 +64,7 @@ public final class SpacesModel {
             guard (qr["v"] as? Int) == 1,
                   qr["endpoint"] as? String == profile?["endpoint"] as? String,
                   profile?["controlSpaceId"] == nil || qrSpace == profile?["controlSpaceId"] as? String else {
-                message = "QR-Endpunkt oder Control-Space passt nicht zur vorbereiteten Identität"
+                message = "QR endpoint or control space does not match the prepared identity"
                 return
             }
             value = token

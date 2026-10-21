@@ -1,9 +1,8 @@
 import SwiftUI
 
 // Native port of spaces.html: device pairing (prepare form, enroll with QR
-// content or token), the key action buttons, and space connection. Labels
-// stay German like the web page; only "Android Keystore" is dropped from the
-// prepare button since this is the iOS app.
+// content or token), the key action buttons, and space connection. The web
+// page's labels are German; the native app uses English throughout.
 
 struct SpacesView: View {
     @Environment(AppModel.self) private var model
@@ -18,18 +17,18 @@ struct SpacesView: View {
     var body: some View {
         let spaces = model.spaces
         Form {
-            Section("Gerät koppeln") {
-                TextField("Eigene NetBird Peer-ID", text: $peerId)
+            Section("Pair device") {
+                TextField("Own NetBird peer ID", text: $peerId)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                TextField("Vertrauenswürdige Control Host-ID", text: $controlHostId)
+                TextField("Trusted control host ID", text: $controlHostId)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                TextField("Control-Endpunkt", text: $controlEndpoint, prompt: Text("tcp://100.x.x.x:PORT"))
+                TextField("Control endpoint", text: $controlEndpoint, prompt: Text("tcp://100.x.x.x:PORT"))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
-                Button("Geräteschlüssel anlegen") {
+                Button("Create device key") {
                     Task {
                         _ = await spaces.call("prepare", body: [
                             "peerId": peerId,
@@ -39,11 +38,11 @@ struct SpacesView: View {
                     }
                 }
                 .disabled(spaces.running || peerId.isEmpty || controlHostId.isEmpty || controlEndpoint.isEmpty)
-                TextField("Enrollment-QR-Inhalt oder Token", text: $enrollToken, axis: .vertical)
+                TextField("Enrollment QR content or token", text: $enrollToken, axis: .vertical)
                     .lineLimit(1...4)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                Button("Koppeln") {
+                Button("Pair") {
                     // The input is cleared on submit like the web page.
                     let value = enrollToken
                     enrollToken = ""
@@ -52,23 +51,23 @@ struct SpacesView: View {
                 .disabled(spaces.running || enrollToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Section {
-                actionButton("Kopplungsstatus prüfen", "enrollStatus", spaces)
-                actionButton("Schlüsselbeweis prüfen", "authenticate", spaces)
-                actionButton("Schlüssel rotieren", "rotate", spaces)
-                actionButton("Rotation auswerten", "rotationStatus", spaces)
+                actionButton("Check pairing status", "enrollStatus", spaces)
+                actionButton("Prove key possession", "authenticate", spaces)
+                actionButton("Rotate key", "rotate", spaces)
+                actionButton("Check rotation", "rotationStatus", spaces)
             }
-            Section("Space verbinden") {
-                TextField("Vertrauenswürdige Data Host-ID", text: $dataHostId)
+            Section("Connect space") {
+                TextField("Trusted data host ID", text: $dataHostId)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                TextField("Data-Endpunkt", text: $dataEndpoint, prompt: Text("tcp://100.x.x.x:PORT"))
+                TextField("Data endpoint", text: $dataEndpoint, prompt: Text("tcp://100.x.x.x:PORT"))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
-                TextField("Space-ID oder Alias", text: $dataSpace)
+                TextField("Space ID or alias", text: $dataSpace)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
-                Button("Host und Space speichern") {
+                Button("Save host and space") {
                     Task {
                         _ = await spaces.call("dataHost", body: [
                             "hostId": dataHostId,
@@ -78,11 +77,11 @@ struct SpacesView: View {
                     }
                 }
                 .disabled(spaces.running || dataHostId.isEmpty || dataEndpoint.isEmpty || dataSpace.isEmpty)
-                actionButton("Space und Objekte anzeigen", "objects", spaces)
+                actionButton("Show space and objects", "objects", spaces)
                 NavigationLink {
                     SpaceCtlView()
                 } label: {
-                    Label("Läufe, Worker und Vorgänge steuern", systemImage: "switch.2")
+                    Label("Control runs, workers and operations", systemImage: "switch.2")
                 }
             }
             if !spaces.message.isEmpty || spaces.result != nil {

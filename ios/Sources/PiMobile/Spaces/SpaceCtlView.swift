@@ -3,7 +3,8 @@ import SwiftUI
 // Native port of spacectl.html: alerts, operations, runs (with the full run
 // card action set incl. dry-run-confirmed stop and recovery decisions),
 // workers, space create/archive/reactivate/delete, deployment plan/export,
-// and the audit log. All German labels match the web page.
+// and the audit log. The web page's labels are German; the native app uses
+// English throughout.
 
 struct SpaceCtlView: View {
     @Environment(AppModel.self) private var model
@@ -36,7 +37,7 @@ struct SpaceCtlView: View {
         let ctl = model.spaceCtl
         Form {
             Section {
-                Text("Aufträge gehen als Admin-Commands an den Koordinator. Erfolg wird erst nach dessen Ergebnis angezeigt; bei Zeitüberschreitung bleibt die Auftrags-ID erhalten.")
+                Text("Commands go to the coordinator as admin commands. Success is only shown once its result arrives; on timeout the command ID is kept.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if !ctl.message.isEmpty {
@@ -45,16 +46,16 @@ struct SpaceCtlView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Section("Hinweise") {
-                loadButton("Hinweise laden") { await ctl.loadAlerts() }
+            Section("Alerts") {
+                loadButton("Load alerts") { await ctl.loadAlerts() }
                 if let alerts = ctl.alerts {
                     if alerts.isEmpty {
-                        Text("Keine Hinweise. Das ist kein Beweis, dass alles läuft: offline gemeldete Hosts erscheinen erst nach Ablauf ihres Heartbeats.")
+                        Text("No alerts. That is no proof that everything runs: hosts reported offline only appear after their heartbeat expires.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
                         ForEach(alerts) { alert in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("\(alert.severity == "critical" ? "Kritisch" : "Hinweis") · \(alert.source) · \(alert.subject)")
+                                Text("\(alert.severity == "critical" ? "Critical" : "Notice") · \(alert.source) · \(alert.subject)")
                                     .font(.subheadline.weight(.medium))
                                 Text(alert.message).font(.caption).foregroundStyle(.secondary)
                             }
@@ -62,11 +63,11 @@ struct SpaceCtlView: View {
                     }
                 }
             }
-            Section("Vorgänge") {
-                loadButton("Vorgänge aktualisieren") { await ctl.loadOperations() }
+            Section("Operations") {
+                loadButton("Refresh operations") { await ctl.loadOperations() }
                 if let operations = ctl.operations {
                     if operations.isEmpty {
-                        Text("Keine Vorgänge auf diesem Gerät.")
+                        Text("No operations on this device.")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
                         ForEach(operations) { op in
@@ -75,11 +76,11 @@ struct SpaceCtlView: View {
                     }
                 }
             }
-            Section("Läufe") {
-                loadButton("Läufe laden") { await ctl.loadRuns() }
+            Section("Runs") {
+                loadButton("Load runs") { await ctl.loadRuns() }
                 if let runs = ctl.runs {
                     if runs.isEmpty {
-                        Text("Keine Läufe.").font(.footnote).foregroundStyle(.secondary)
+                        Text("No runs.").font(.footnote).foregroundStyle(.secondary)
                     } else {
                         ForEach(runs) { run in
                             RunCard(run: run, ctl: ctl, stopPreview: $stopPreview,
@@ -89,17 +90,17 @@ struct SpaceCtlView: View {
                 }
             }
             sieveForm(ctl)
-            Section("Worker") {
-                loadButton("Worker laden") { await ctl.loadWorkers() }
+            Section("Workers") {
+                loadButton("Load workers") { await ctl.loadWorkers() }
                 if let assignments = ctl.assignments {
                     if assignments.isEmpty {
-                        Text("Keine Zuweisungen.").font(.footnote).foregroundStyle(.secondary)
+                        Text("No assignments.").font(.footnote).foregroundStyle(.secondary)
                     } else {
                         ForEach(assignments) { a in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("\(a.id) · \(a.kind) · gewünscht \(a.count)")
+                                Text("\(a.id) · \(a.kind) · wanted \(a.count)")
                                     .font(.subheadline.weight(.medium))
-                                Text("Host \(a.hostId) · Space \(a.targetSpace)\(a.runId.map { " · Lauf \($0)" } ?? "") · Generation \(a.generation)")
+                                Text("Host \(a.hostId) · Space \(a.targetSpace)\(a.runId.map { " · Run \($0)" } ?? "") · Generation \(a.generation)")
                                     .font(.caption).foregroundStyle(.secondary)
                                 Text(a.report).font(.caption).foregroundStyle(.secondary)
                             }
@@ -109,45 +110,45 @@ struct SpaceCtlView: View {
             }
             workersForm(ctl)
             Section("Spaces") {
-                TextField("Host-ID", text: $createHostId)
+                TextField("Host ID", text: $createHostId)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                 TextField("Alias", text: $createAlias)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
-                Button("Space anlegen oder vorhandenen wiederverwenden") {
+                Button("Create space or reuse existing") {
                     Task { await ctl.createSpace(hostId: createHostId, alias: createAlias) }
                 }
                 .disabled(createHostId.isEmpty || createAlias.isEmpty)
-                TextField("Host-ID", text: $changeHostId)
+                TextField("Host ID", text: $changeHostId)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
-                TextField("Space-ID", text: $changeSpaceId)
+                TextField("Space ID", text: $changeSpaceId)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                 HStack {
-                    Button("Archivieren") {
+                    Button("Archive") {
                         Task { await ctl.spaceChange(kind: "archiveSpace", hostId: changeHostId, spaceId: changeSpaceId) }
                     }
-                    Button("Reaktivieren") {
+                    Button("Reactivate") {
                         Task { await ctl.spaceChange(kind: "reactivateSpace", hostId: changeHostId, spaceId: changeSpaceId) }
                     }
-                    Button("Löschen", role: .destructive) { deleteSpaceConfirm = true }
+                    Button("Delete", role: .destructive) { deleteSpaceConfirm = true }
                 }
                 .buttonStyle(.borderless)
                 .disabled(changeHostId.isEmpty || changeSpaceId.isEmpty)
             }
             Section("Deployment") {
-                TextField("Deployment-Config (JSON, ohne Geheimnisse)", text: $deploymentConfig, axis: .vertical)
+                TextField("Deployment config (JSON, no secrets)", text: $deploymentConfig, axis: .vertical)
                     .lineLimit(4...8)
                     .font(.caption.monospaced())
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                 HStack {
-                    Button("Plan anzeigen") { Task { await ctl.planDeployment(configText: deploymentConfig) } }
-                    Button("Angewendeten Stand exportieren") { Task { await ctl.exportDeployment(configText: deploymentConfig) } }
+                    Button("Show plan") { Task { await ctl.planDeployment(configText: deploymentConfig) } }
+                    Button("Export applied state") { Task { await ctl.exportDeployment(configText: deploymentConfig) } }
                 }
                 .buttonStyle(.borderless)
                 .disabled(deploymentConfig.isEmpty)
                 if let result = ctl.deploymentResult {
                     switch result {
                     case .plan(let ready, let steps):
-                        Text(ready ? "Plan bereit" : "Plan blockiert")
+                        Text(ready ? "Plan ready" : "Plan blocked")
                             .font(.subheadline.weight(.medium))
                         ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
                             Text(step).font(.caption.monospaced()).foregroundStyle(.secondary)
@@ -158,7 +159,7 @@ struct SpaceCtlView: View {
                 }
             }
             Section("Audit") {
-                loadButton("Letzte Admin-Aufträge laden") { await ctl.loadAudit() }
+                loadButton("Load recent admin commands") { await ctl.loadAudit() }
                 if let audit = ctl.audit {
                     ForEach(audit) { entry in
                         VStack(alignment: .leading, spacing: 2) {
@@ -173,64 +174,64 @@ struct SpaceCtlView: View {
         }
         // Like the web page, every button disables while a command runs.
         .disabled(ctl.running)
-        .navigationTitle("Steuerung")
+        .navigationTitle("Control")
         .navigationBarTitleDisplayMode(.inline)
         .task { await ctl.loadOperations() }
-        .alert("Lauf \(stopPreview?.run.id ?? "") endgültig stoppen?",
+        .alert("Stop run \(stopPreview?.run.id ?? "") permanently?",
                isPresented: Binding(
                    get: { stopPreview != nil },
                    set: { if !$0 { stopPreview = nil } }
                )) {
-            Button("Lauf stoppen", role: .destructive) {
+            Button("Stop run", role: .destructive) {
                 if let preview = stopPreview {
                     Task { await ctl.stopRun(runId: preview.run.id) }
                 }
                 stopPreview = nil
             }
-            Button("Abbrechen", role: .cancel) { stopPreview = nil }
+            Button("Cancel", role: .cancel) { stopPreview = nil }
         } message: {
-            Text("Revision \(stopPreview?.revision ?? 0)? Er kann nicht wieder gestartet werden.")
+            Text("Revision \(stopPreview?.revision ?? 0)? It cannot be restarted.")
         }
-        .confirmationDialog("Alle Worker von \(workerAssignment) nach ihrem laufenden Task stoppen?",
+        .confirmationDialog("Stop all workers of \(workerAssignment) after their current task?",
                             isPresented: $zeroWorkersConfirm, titleVisibility: .visible) {
-            Button("Anzahl setzen (0)") { submitWorkers(ctl) }
-            Button("Abbrechen", role: .cancel) {}
+            Button("Set count (0)") { submitWorkers(ctl) }
+            Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Space \(changeSpaceId) löschen?",
+        .confirmationDialog("Delete space \(changeSpaceId)?",
                             isPresented: $deleteSpaceConfirm, titleVisibility: .visible) {
-            Button("Löschen", role: .destructive) {
+            Button("Delete", role: .destructive) {
                 Task { await ctl.spaceChange(kind: "deleteSpace", hostId: changeHostId, spaceId: changeSpaceId) }
             }
-            Button("Abbrechen", role: .cancel) {}
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Nur ein archivierter, leerer Space ohne Mitgliedschaft wird gelöscht; die ID bleibt reserviert.")
+            Text("Only an archived, empty space without membership is deleted; the ID stays reserved.")
         }
-        .confirmationDialog("Recovery-Entscheidung „\(recoveryDecision?.decision ?? "")“ für \(recoveryDecision?.run.id ?? "") an den geprüften Stand binden?",
+        .confirmationDialog("Bind recovery decision \"\(recoveryDecision?.decision ?? "")\" for \(recoveryDecision?.run.id ?? "") to the reviewed state?",
                             isPresented: Binding(
                                 get: { recoveryDecision != nil },
                                 set: { if !$0 { recoveryDecision = nil } }
                             ), titleVisibility: .visible) {
-            Button("Binden") {
+            Button("Bind") {
                 if let pending = recoveryDecision {
                     Task { await ctl.resolveRecovery(runId: pending.run.id, expectedViewHash: pending.run.reviewViewHash ?? "", decision: pending.decision) }
                 }
                 recoveryDecision = nil
             }
-            Button("Abbrechen", role: .cancel) { recoveryDecision = nil }
+            Button("Cancel", role: .cancel) { recoveryDecision = nil }
         }
-        .alert("Zeitpunkt (JJJJ-MM-TT HH:MM, lokale Zeit)",
+        .alert("Time (YYYY-MM-DD HH:MM, local time)",
                isPresented: Binding(
                    get: { schedule != nil },
                    set: { if !$0 { schedule = nil } }
                )) {
-            TextField("JJJJ-MM-TT HH:MM", text: $scheduleWhen)
-            Button("Planen") {
+            TextField("YYYY-MM-DD HH:MM", text: $scheduleWhen)
+            Button("Schedule") {
                 if let pending = schedule, !scheduleWhen.isEmpty {
                     Task { await ctl.scheduleRun(runId: pending.runId, kind: pending.kind, when: scheduleWhen) }
                 }
                 schedule = nil
             }
-            Button("Abbrechen", role: .cancel) { schedule = nil }
+            Button("Cancel", role: .cancel) { schedule = nil }
         }
     }
 
@@ -239,18 +240,18 @@ struct SpaceCtlView: View {
     }
 
     private func sieveForm(_ ctl: SpaceCtlModel) -> some View {
-        Section("Primzahlsieb") {
-            TextField("Lauf-ID", text: $sieveRunId)
+        Section("Prime sieve") {
+            TextField("Run ID", text: $sieveRunId)
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
             TextField("Start", text: $sieveStart)
                 .keyboardType(.numberPad)
-            TextField("Exklusive Obergrenze", text: $sieveEnd)
+            TextField("Exclusive upper bound", text: $sieveEnd)
                 .keyboardType(.numberPad)
-            TextField("Blockgröße", text: $sieveBlockSize)
+            TextField("Block size", text: $sieveBlockSize)
                 .keyboardType(.numberPad)
-            TextField("Space-IDs der Members (kommagetrennt)", text: $sieveMembers)
+            TextField("Member space IDs (comma-separated)", text: $sieveMembers)
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
-            Button("Primzahlsieb starten") {
+            Button("Start prime sieve") {
                 Task {
                     await ctl.startSieve(
                         runId: sieveRunId,
@@ -266,20 +267,20 @@ struct SpaceCtlView: View {
     }
 
     private func workersForm(_ ctl: SpaceCtlModel) -> some View {
-        Section("Anzahl setzen") {
-            TextField("Zuweisung", text: $workerAssignment)
+        Section("Set count") {
+            TextField("Assignment", text: $workerAssignment)
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
-            TextField("Host-ID", text: $workerHostId)
+            TextField("Host ID", text: $workerHostId)
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
-            TextField("Workerart", text: $workerKind)
+            TextField("Worker kind", text: $workerKind)
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
-            TextField("Ziel-Space-ID", text: $workerSpace)
+            TextField("Target space ID", text: $workerSpace)
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
-            TextField("Lauf-ID (optional)", text: $workerRunId)
+            TextField("Run ID (optional)", text: $workerRunId)
                 .autocorrectionDisabled().textInputAutocapitalization(.never)
-            TextField("Anzahl (0 stoppt nach dem laufenden Task)", text: $workerCount)
+            TextField("Count (0 stops after the current task)", text: $workerCount)
                 .keyboardType(.numberPad)
-            Button("Anzahl setzen") {
+            Button("Set count") {
                 if Int(workerCount) == 0 {
                     zeroWorkersConfirm = true
                 } else {
@@ -320,7 +321,7 @@ private struct OperationRow: View {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
             if !op.final {
-                Button("Gleichen Auftrag erneut senden") {
+                Button("Resend same command") {
                     Task { await model.spaceCtl.resend(op) }
                 }
                 .font(.caption)
@@ -351,9 +352,9 @@ private struct RunCard: View {
                 Text(recovery).font(.caption).foregroundStyle(.secondary)
             }
             if run.state == "needsReview", let hash = run.reviewViewHash {
-                Text("Geprüfter Stand \(hash.prefix(12))…: \(run.reviewText ?? "")")
+                Text("Reviewed state \(hash.prefix(12))…: \(run.reviewText ?? "")")
                     .font(.caption).foregroundStyle(.secondary)
-                ForEach([("Als pausiert festlegen", "pause"), ("Endgültig stoppen", "stop"), ("Fortsetzen (nach Pause-Barriere)", "resume")], id: \.1) { label, decision in
+                ForEach([("Set as paused", "pause"), ("Stop permanently", "stop"), ("Resume (after pause barrier)", "resume")], id: \.1) { label, decision in
                     Button(label) {
                         recoveryDecision = (run, decision)
                     }
@@ -371,13 +372,13 @@ private struct RunCard: View {
                 .font(.caption)
                 .buttonStyle(.borderless)
             }
-            Button("Ergebnis ansehen") {
+            Button("View result") {
                 Task { await ctl.exportRun(runId: run.id) }
             }
             .font(.caption)
             .buttonStyle(.borderless)
             if run.state == "running" || run.state == "paused" {
-                Button(run.state == "running" ? "Pause planen" : "Fortsetzen planen") {
+                Button(run.state == "running" ? "Schedule pause" : "Schedule resume") {
                     schedule = (run.id, run.state == "running" ? "pause" : "resume")
                 }
                 .font(.caption)
@@ -386,11 +387,11 @@ private struct RunCard: View {
             if ["running", "paused", "preparing"].contains(run.state) {
                 // Plan preview first: the coordinator says whether the stop
                 // is accepted now and with which revision.
-                Button("Lauf stoppen", role: .destructive) {
+                Button("Stop run", role: .destructive) {
                     Task {
                         if let preview = await ctl.stopRunPreview(runId: run.id) {
                             if !preview.allowed {
-                                ctl.message = "Nicht möglich: \(preview.reason)"
+                                ctl.message = "Not possible: \(preview.reason)"
                             } else {
                                 stopPreview = (run, preview.revision)
                             }
@@ -403,14 +404,14 @@ private struct RunCard: View {
         }
     }
 
-    /// The plain state actions (stop/resume/status), excluding the special
+    /// The plain state actions (pause/resume/status), excluding the special
     /// flows handled above.
     private var actions: [(label: String, kind: String)] {
         var list: [(String, String)] = []
-        if run.state == "running" { list.append(("Pausieren", "pauseRun")) }
-        if run.state == "paused" { list.append(("Fortsetzen", "resumeRun")) }
+        if run.state == "running" { list.append(("Pause", "pauseRun")) }
+        if run.state == "paused" { list.append(("Resume", "resumeRun")) }
         if ["pauseIncomplete", "pausing", "resuming"].contains(run.state) {
-            list.append(("Status abfragen", "runStatus"))
+            list.append(("Query status", "runStatus"))
         }
         return list
     }

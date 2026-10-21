@@ -5,8 +5,9 @@ import Observation
 // commands. The bridge serves one space operation at a time, so all buttons
 // disable while a command runs; a sent command keeps its ID and is polled
 // for its result (up to 30 s), after which the ID stays usable under
-// Vorgänge. Unlike the web page there is no visibility short-circuit —
+// Operations. Unlike the web page there is no visibility short-circuit —
 // polling simply continues; the coordinator keeps the command either way.
+// The web page's labels are German; the native app uses English throughout.
 
 // MARK: - Display structs (parsed once, prebuilt text like the web cards)
 
@@ -49,9 +50,9 @@ public struct CtlRun: Identifiable {
         revision = dict["revision"] as? Int ?? 0
         members = dict["members"] as? [String] ?? []
         if let pending = dict["pending"] as? [String: Any] {
-            var text = "Offen: \(pending["kind"] as? String ?? "?") r\(pending["revision"] as? Int ?? 0); bestätigt \((pending["applied"] as? [Any])?.count ?? 0)/\(members.count)"
+            var text = "Pending: \(pending["kind"] as? String ?? "?") r\(pending["revision"] as? Int ?? 0); confirmed \((pending["applied"] as? [Any])?.count ?? 0)/\(members.count)"
             if let missing = pending["missing"] as? [String], !missing.isEmpty {
-                text += ", fehlend: " + missing.joined(separator: ", ")
+                text += ", missing: " + missing.joined(separator: ", ")
             }
             pendingText = text
         } else {
@@ -65,18 +66,18 @@ public struct CtlRun: Identifiable {
         }
         var text = "Recovery \(recovery["id"] as? String ?? "?"): \(recovery["stage"] as? String ?? "?")"
         if let abandoned = recovery["abandoned"] as? [String: Any] {
-            text += ", geparkt: \(abandoned["kind"] as? String ?? "?") r\(abandoned["revision"] as? Int ?? 0)"
+            text += ", parked: \(abandoned["kind"] as? String ?? "?") r\(abandoned["revision"] as? Int ?? 0)"
         }
         recoveryText = text
         reviewViewHash = recovery["viewHash"] as? String
         if let views = recovery["views"] as? [String: [String: Any]] {
             let parts = views.map { member, view -> String in
-                let gate = (view["gate"] as? [String: Any])?["state"] as? String ?? "fehlt"
+                let gate = (view["gate"] as? [String: Any])?["state"] as? String ?? "missing"
                 var part = "\(member): \(gate)"
                 if let fence = (view["fence"] as? [String: Any])?["kind"] as? String {
-                    part += " (offen \(fence))"
+                    part += " (open \(fence))"
                 }
-                if view["stopped"] as? Bool == true { part += ", gestoppt" }
+                if view["stopped"] as? Bool == true { part += ", stopped" }
                 return part
             }.sorted()
             reviewText = parts.isEmpty ? nil : parts.joined(separator: "; ")
@@ -172,7 +173,7 @@ public final class SpaceCtlModel {
     public func command(_ kind: String, args: [String: Any] = [:], commandId: String? = nil) async -> Any? {
         guard let api else { return nil }
         running = true
-        message = "Auftrag wird gesendet …"
+        message = "Sending command …"
         defer { running = false }
         do {
             var body: [String: Any] = ["kind": kind, "args": args]
@@ -184,14 +185,14 @@ public final class SpaceCtlModel {
             }
             let id = (sent["operation"] as? [String: Any])?["commandId"] as? String ?? commandId ?? "?"
             var result = sent["result"] as? [String: Any]
-            message = "Auftrag \(id) angenommen, Ergebnis ausstehend …"
+            message = "Command \(id) accepted, result pending …"
             for _ in 0..<30 where result == nil {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
                 let poll: [String: Any] = try await api.post("/api/spaces/result", body: ["commandId": id])
                 result = poll["result"] as? [String: Any]
             }
             guard let result else {
-                message = "Ausgang wird geprüft (\(id)). Bitte nicht neu starten, sondern unter Vorgängen erneut abfragen."
+                message = "Outcome is being checked (\(id)). Do not restart; query again under Operations."
                 return nil
             }
             let payload = result["result"]
@@ -201,10 +202,10 @@ public final class SpaceCtlModel {
                 let detail = (result["error"] as? String)
                     ?? (payload as? [String: Any])?["error"] as? String
                     ?? (result["state"] as? String ?? "?")
-                message = "Abgelehnt: \(detail)"
+                message = "Rejected: \(detail)"
                 return nil
             }
-            message = "Erledigt (\(id))"
+            message = "Done (\(id))"
             return payload
         } catch {
             message = error.localizedDescription
@@ -266,15 +267,15 @@ public final class SpaceCtlModel {
     /// The host's last report line, or the warning that no report exists.
     private func workerReport(_ a: [String: Any], applied: [String: [String: Any]]) -> String {
         guard let host = applied[a["hostId"] as? String ?? ""], let workers = host["workers"] as? [String: Any] else {
-            return "Kein Bericht des Hosts; „offline“ beweist nicht, dass Worker beendet sind."
+            return "No report from the host; \"offline\" does not prove that workers have stopped."
         }
         let state = (workers["assignments"] as? [String: [String: Any]])?[a["assignmentId"] as? String ?? ""]
-        var text = "Gemeldet \(Date(timeIntervalSince1970: (host["at"] as? Double ?? 0) / 1000).formatted(date: .omitted, time: .shortened)): aktiv \(state?["active"] as? Int ?? 0), beendend \(state?["stopping"] as? Int ?? 0), Tasks \(state?["tasks"] as? Int ?? 0)"
+        var text = "Reported \(Date(timeIntervalSince1970: (host["at"] as? Double ?? 0) / 1000).formatted(date: .omitted, time: .shortened)): active \(state?["active"] as? Int ?? 0), stopping \(state?["stopping"] as? Int ?? 0), tasks \(state?["tasks"] as? Int ?? 0)"
         if let rejected = state?["rejected"] as? String {
-            text += ", abgelehnt: \(rejected)"
+            text += ", rejected: \(rejected)"
         }
         if (workers["generation"] as? Int ?? 0) < (a["generation"] as? Int ?? 0) {
-            text += " (Änderung noch nicht übernommen)"
+            text += " (change not applied yet)"
         }
         return text
     }
@@ -300,7 +301,7 @@ public final class SpaceCtlModel {
     public func createSpace(hostId: String, alias: String) async {
         if let r = await command("createSpace", args: ["hostId": hostId, "alias": alias]) as? [String: Any] {
             let reused = r["existed"] as? Bool ?? false
-            message = "\(reused ? "Wiederverwendet" : "Angelegt"): \(r["alias"] as? String ?? alias) = \(r["spaceId"] as? String ?? "?")"
+            message = "\(reused ? "Reused" : "Created"): \(r["alias"] as? String ?? alias) = \(r["spaceId"] as? String ?? "?")"
         }
     }
 
@@ -314,7 +315,7 @@ public final class SpaceCtlModel {
     private func parseConfig(_ text: String) -> Any? {
         guard let data = text.data(using: .utf8),
               let config = try? JSONSerialization.jsonObject(with: data) else {
-            message = "Config ist kein gültiges JSON"
+            message = "Config is not valid JSON"
             return nil
         }
         return config
@@ -364,23 +365,23 @@ public final class SpaceCtlModel {
         guard let r = await command("exportRun", args: ["runId": runId]) as? [String: Any],
               let idx = runs?.firstIndex(where: { $0.id == runId }) else { return }
         let complete = r["complete"] as? Bool ?? false
-        var text = "\(complete ? "Vollständig" : "TEILRESULTAT"): \(r["found"] as? Int ?? 0)/\(r["expected"] as? Int ?? 0) Teile"
+        var text = "\(complete ? "Complete" : "PARTIAL RESULT"): \(r["found"] as? Int ?? 0)/\(r["expected"] as? Int ?? 0) parts"
         if let missing = r["missing"] as? [String], !missing.isEmpty {
-            text += ", fehlend z. B. " + missing.prefix(3).joined(separator: ", ")
+            text += ", missing e.g. " + missing.prefix(3).joined(separator: ", ")
         }
         if let summary = r["summary"],
            let data = try? JSONSerialization.data(withJSONObject: summary, options: [.sortedKeys]),
            let str = String(data: data, encoding: .utf8) {
             text += " · \(str)"
         }
-        text += " · Manifest \((r["manifestHash"] as? String ?? "").prefix(12))… · Ergebnis \((r["resultHash"] as? String ?? "").prefix(12))…"
+        text += " · Manifest \((r["manifestHash"] as? String ?? "").prefix(12))… · Result \((r["resultHash"] as? String ?? "").prefix(12))…"
         runs?[idx].exportText = text
     }
 
-    /// Schedules a pause/resume from "JJJJ-MM-TT HH:MM" local time.
+    /// Schedules a pause/resume from "YYYY-MM-DD HH:MM" local time.
     public func scheduleRun(runId: String, kind: String, when: String) async {
         guard let date = Self.whenFormatter.date(from: when.replacingOccurrences(of: " ", with: "T")) else {
-            message = "Ungültiger Zeitpunkt"
+            message = "Invalid time"
             return
         }
         if let r = await command("scheduleRun", args: ["runId": runId, "kind": kind, "at": date.timeIntervalSince1970 * 1000]) as? [String: Any],
@@ -389,7 +390,7 @@ public final class SpaceCtlModel {
                 let at = Date(timeIntervalSince1970: (s["at"] as? Double ?? 0) / 1000)
                 return "\(s["kind"] as? String ?? "?") \(at.formatted(date: .abbreviated, time: .shortened))"
             }.joined(separator: ", ")
-            message = "Geplant: \(text)"
+            message = "Scheduled: \(text)"
         }
     }
 
