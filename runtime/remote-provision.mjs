@@ -11,7 +11,7 @@ import { attachRemote, parseSshTarget } from './remote-client.mjs';
 import { sshBackend, withDeadline } from './ssh-transport.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-export const REMOTE_FILES = ['pi-serverd.mjs', 'serverd-tcp.mjs', 'common.mjs', 'fileio.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json'];
+export const REMOTE_FILES = ['pi-serverd.mjs', 'serverd-tcp.mjs', 'common.mjs', 'fileio.mjs', 'session-ops.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json'];
 // Generated CLI examples are optional, not needed by the daemon. Hash and
 // upload the same manifest so a fresh checkout remains deployable.
 export function remoteFiles(root = ROOT) {

@@ -20,7 +20,8 @@ import { createUnixListener } from '@earendil-works/pi-server/unix';
 import { Server, SessionNotFoundError } from '@earendil-works/pi-server';
 import { createTcpListener } from './serverd-tcp.mjs';
 import { SpaceService, StaticIdentity, withSpaceService, startConfiguredFederation, spaces as Spaces, startService as startSpaceService } from './pi-spaces.mjs';
-import { acquireOwnerLock, readJson, writeFileAtomic } from './fileio.mjs';
+import { acquireOwnerLock, writeFileAtomic } from './fileio.mjs';
+import { deleteSession, importLegacySessions, renameSession, sessionName } from './session-ops.mjs';
 import {
   createCredentialStore, createModelCatalog,
   ensureModel, isBusy, openHarness, pickModel, requestIdOf, sessionStore, Subagent,
@@ -70,13 +71,8 @@ const sessions = sessionStore(harness, ctx);
 
 // one-time import of the old JSON manifest
 {
-  const legacy = readJson(LEGACY_MANIFEST, null)?.sessions;
-  if (legacy && Object.keys(legacy).length && !(await sessions.list()).length) {
-    const n = await sessions.migrate(legacy);
-    writeFileAtomic(`${LEGACY_MANIFEST}.migrated`, JSON.stringify({ sessions: legacy }, null, 2));
-    try { unlinkSync(LEGACY_MANIFEST); } catch {}
-    console.log(`migrated ${n} sessions from ${LEGACY_MANIFEST}`);
-  }
+  const migrated = await importLegacySessions(sessions, LEGACY_MANIFEST);
+  if (migrated) console.log(`migrated ${migrated} sessions from ${LEGACY_MANIFEST}`);
 }
 const federation = process.env.PI_SERVERD_FEDERATION_CONFIG
   ? await startConfiguredFederation(harness, ctx, process.env.PI_SERVERD_FEDERATION_CONFIG) : null;
@@ -282,7 +278,7 @@ const host = {
             case 'create': {
               const opts = call.args[0] ?? {};
               const conv = await sessions.create(
-                { name: typeof opts.name === 'string' ? opts.name.slice(0, 100) : undefined, cwd: WORKDIR },
+                { name: sessionName(opts.name), cwd: WORKDIR },
                 { agent: { model: await pickModel(models) } },
               );
               return { id: String(conv.id) };
@@ -290,11 +286,8 @@ const host = {
             case 'delete': {
               const id = String(call.args[0]);
               return withSessionMutation(id, async () => {
-                const conv = await conversationOf(id);
                 // No prompt/compact can start between abort and removal.
-                await conv.abort(c);
-                // Transcript stays in SQLite; every attached handler now rejects.
-                await sessions.remove(id);
+                await deleteSession(harness, sessions, id, c);
                 return { ok: true };
               });
             }
@@ -305,10 +298,7 @@ const host = {
               return { ok: true };
             }
             case 'rename': {
-              const id = String(call.args[0]);
-              const name = typeof call.args[1] === 'string' ? call.args[1].slice(0, 100) : undefined;
-              if (!(await sessions.get(id))) throw new Error(`unknown session: ${id}`);
-              await sessions.update(id, { name: name || undefined });
+              await renameSession(sessions, String(call.args[0]), call.args[1]);
               return { ok: true };
             }
             default:

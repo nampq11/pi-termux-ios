@@ -23,6 +23,7 @@ import { copyAuthTo, probeRemote, remoteBash, runtimeHash, stopRemoteServer } fr
 import { setSshBackend, sshBackend } from './ssh-transport.mjs';
 import { jsSshBackend } from './ssh-js-backend.mjs';
 import { acquireOwnerLock, readJson, writeFileAtomic } from './fileio.mjs';
+import { deleteSession, importLegacySessions, renameSession, sessionName } from './session-ops.mjs';
 import {
   agentOf, createCredentialStore, createModelCatalog, ensureModel, isBusy,
   openHarness, pickModel, requestIdOf, sessionStore, Subagent, whenBusyOf,
@@ -204,13 +205,7 @@ let active = null; // the conversation the chat page shows
 
 async function initHarness() {
   const root = await harness.root(ctx, { agent: { model: await pickModel(models) } });
-  // one-time import of the old JSON side file
-  const legacy = readJson(LEGACY_SESSIONS_FILE, null)?.sessions;
-  if (legacy && Object.keys(legacy).length) {
-    await sessions.migrate(legacy);
-    writeFileAtomic(`${LEGACY_SESSIONS_FILE}.migrated`, JSON.stringify({ sessions: legacy }, null, 2));
-    try { unlinkSync(LEGACY_SESSIONS_FILE); } catch {}
-  }
+  await importLegacySessions(sessions, LEGACY_SESSIONS_FILE);
   await sessions.register(root.id, { name: 'Main' });
   // reopen the session that was active before the restart
   const remembered = await sessions.activeId();
@@ -402,7 +397,7 @@ async function handleApi(req, res, url, p) {
   if (p === '/api/sessions/new' && req.method === 'POST') {
     // a new session starts with the model the current one uses
     const conversation = await sessions.create(
-      { name: str(body.name, 100) || undefined },
+      { name: sessionName(body.name) },
       { agent: { model: (await currentModel(active)) ?? await pickModel(models) } },
     );
     await activate(conversation);
@@ -429,18 +424,13 @@ async function handleApi(req, res, url, p) {
     return json(res, 200, { ok: true, activeId: String(conversation.id) });
   }
   if (p === '/api/sessions/rename' && req.method === 'POST') {
-    const id = str(body.id);
-    if (!(await sessions.get(id))) return json(res, 404, { error: 'unknown session' });
-    await sessions.update(id, { name: str(body.name, 100) || undefined });
+    await renameSession(sessions, str(body.id), body.name);
     return json(res, 200, { ok: true });
   }
   if (p === '/api/sessions/delete' && req.method === 'POST') {
     const id = str(body.id);
-    if (!(await sessions.get(id))) return json(res, 404, { error: 'unknown session' });
     // stop its work first: a hidden session must not keep running tools
-    const conversation = await harness.conversation(Number(id), ctx);
-    if (conversation) await conversation.abort(ctx);
-    await sessions.remove(id); // transcript stays in SQLite
+    await deleteSession(harness, sessions, id, ctx);
     // deleting the shown session must leave the chat page on a live one
     // Main (the root conversation) is the guaranteed landing spot; if the
     // deleted session was Main itself, re-register it so the list keeps it.
