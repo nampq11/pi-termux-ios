@@ -7,6 +7,10 @@
 // openTcpTunnel end-to-end: the full iOS attach path minus the phone — the js
 // backend bridges a local unix socket over ssh2 direct-tcpip (real sshd) into
 // the TCP listener; pi-client then talks the real protocol through it.
+//
+// The sshd suites need a local sshd and edit ~/.ssh/authorized_keys: they are
+// skipped unless PI_SERVERD_TCP_TESTS=1. The two tcp-listener protocol tests
+// have no such requirement and always run.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
@@ -18,6 +22,10 @@ import path from 'node:path';
 import { createTcpListener } from './serverd-tcp.mjs';
 import { createTestServer, TestServerHost, ProtocolTestClient } from '@earendil-works/pi-server/testing';
 import { jsSshBackend } from './ssh-js-backend.mjs';
+
+const TCP_SKIP = process.env.PI_SERVERD_TCP_TESTS
+  ? false
+  : 'set PI_SERVERD_TCP_TESTS=1 (needs a local sshd; edits ~/.ssh/authorized_keys)';
 import { Client } from '@earendil-works/pi-client';
 import { createUnixTransportFactory } from '@earendil-works/pi-client/unix';
 
@@ -100,7 +108,7 @@ test('tcp listener refuses duplicate bind and exposes its bound port', async () 
   assert.equal(listener.boundPort, undefined);
 });
 
-test('openTcpTunnel bridges a local unix socket to the remote pi-serverd over sshd', async () => {
+test('openTcpTunnel bridges a local unix socket to the remote pi-serverd over sshd', { skip: TCP_SKIP }, async () => {
   await withAuthorizedKey(async ({ home, target }) => {
     await withTcpServer(async ({ port, serverId }) => {
       const localSock = path.join(home, 'attach.sock');
@@ -129,7 +137,7 @@ test('openTcpTunnel bridges a local unix socket to the remote pi-serverd over ss
   });
 });
 
-test('openTcpTunnel surfaces teardown as proc exit', async () => {
+test('openTcpTunnel surfaces teardown as proc exit', { skip: TCP_SKIP }, async () => {
   await withAuthorizedKey(async ({ home, target }) => {
     const dying = path.join(home, 'dying.sock');
     const tunnel = jsSshBackend.openTcpTunnel({
