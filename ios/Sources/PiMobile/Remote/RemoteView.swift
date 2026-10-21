@@ -183,6 +183,19 @@ struct RemoteView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                if let err = remote.connectError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(err)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
                 Button {
                     haptic()
                     Task {

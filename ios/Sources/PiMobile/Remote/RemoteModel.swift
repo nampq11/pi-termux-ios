@@ -74,6 +74,7 @@ public final class RemoteModel {
     public var connecting = false
     public var link = "disconnected"
     public var dialog: Dialog?
+    public var connectError: String?
 
     private weak var api: BridgeAPI?
 
@@ -376,6 +377,7 @@ public final class RemoteModel {
     public func connectHost(_ target: String) async {
         guard let api, !connecting else { return }
         connecting = true
+        connectError = nil
         connectGeneration += 1
         let generation = connectGeneration
         resetUi()
@@ -424,7 +426,9 @@ public final class RemoteModel {
             if generation != connectGeneration { return }
 
             if r["ok"] as? Bool != true {
-                sys("error: \(r["error"] as? String ?? "could not connect")")
+                let err = r["error"] as? String ?? "could not connect"
+                connectError = err
+                sys("error: \(err)")
                 return
             }
             connected = true
@@ -445,7 +449,10 @@ public final class RemoteModel {
             }
             await showSessions(list.map(Self.parseSession), attachFirst: true)
         } catch {
-            if generation == connectGeneration { sys("error: \(error.localizedDescription)") }
+            if generation == connectGeneration {
+                connectError = error.localizedDescription
+                sys("error: \(error.localizedDescription)")
+            }
         }
     }
 
