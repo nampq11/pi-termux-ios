@@ -1,3 +1,0 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <instrumentation android:name="org.pimobile.app.test.SpaceUiInstrumentation" android:targetPackage="org.pimobile.app" android:functionalTest="true" />
-</manifest>
