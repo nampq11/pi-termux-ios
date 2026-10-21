@@ -19,7 +19,7 @@ FILES = ['server.mjs', 'bridge/http.mjs', 'bridge/sse.mjs', 'bridge/pty.mjs',
          'bridge/routes/system.mjs', 'bridge/routes/sessions.mjs', 'bridge/routes/ssh.mjs',
          'bridge/routes/remote.mjs', 'bridge/routes/accounts.mjs',
          'common.mjs', 'fileio.mjs', 'session-ops.mjs', 'semver.mjs', 'remote-env.mjs', 'env-server.mjs',
-         'pi-serverd.mjs', 'serverd-tcp.mjs', 'space-keystore.mjs', 'spaces-mobile.mjs',
+         'pi-serverd.mjs', 'serverd-tcp.mjs', 'space-keys.mjs', 'spaces-mobile.mjs',
          'remote-client.mjs', 'remote-provision.mjs', 'remote-state.mjs', 'ssh-transport.mjs',
          'ssh-js-backend.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json', 'public',
          'node_modules']

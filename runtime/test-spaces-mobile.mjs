@@ -7,7 +7,7 @@ import { MobileSpaces } from './spaces-mobile.mjs';
 
 test('mobile pairing persists its identity before the effect and resolves a lost response after reopen', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'mobile-pair-')), file = join(dir, 'profile.json'); let created = 0;
-  const keys = { createAndroidSigner: async () => { created++; return { alias: 'native-alias', keyId: 'key', publicKey: 'public' }; } };
+  const keys = { createSigner: async () => { created++; return { alias: 'native-alias', keyId: 'key', publicKey: 'public' }; } };
   const prepare = { peerId: 'phone', controlHostId: 'control', endpoint: 'tcp://100.1.2.3:4711' };
   try {
     const client = new MobileSpaces(file, keys); await client.call('prepare', prepare);
@@ -23,7 +23,7 @@ test('mobile pairing persists its identity before the effect and resolves a lost
 test('a pending rotation is retained across reopen and activates the new alias only after a completed own command', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'mobile-rotate-')), file = join(dir, 'profile.json');
   try {
-    const client = new MobileSpaces(file, { createAndroidSigner: async () => ({ alias: 'replacement', keyId: 'new', publicKey: 'new-public', algorithm: 'ecdsa-p256' }) });
+    const client = new MobileSpaces(file, { createSigner: async () => ({ alias: 'replacement', keyId: 'new', publicKey: 'new-public', algorithm: 'ecdsa-p256' }) });
     client.save({ alias: 'old', keyId: 'old-key', peerId: 'phone', controlHostId: 'control', endpoint: 'tcp://100.1.2.3:4711', state: 'paired' });
     client.connect = async () => ({ close() {}, remote: { authenticate: async () => {}, rotationChallenge: async () => ({ nonce: 'nonce' }), rotateKey: async (_c, _k, options) => { await options.beforeSend({ generation: 'g', requestId: 'r' }); throw new Error('lost rotation reply'); } } });
     await assert.rejects(client.call('rotate'), /lost rotation reply/); assert.equal(client.read().alias, 'old');
@@ -57,7 +57,7 @@ test('data access obtains an app-bound grant from a separately authenticated con
   };
   const dir = mkdtempSync(join(tmpdir(), 'mobile-grant-'));
   try {
-    const client = new MobileSpaces(join(dir, 'profile.json'), { androidSigner: async () => key });
+    const client = new MobileSpaces(join(dir, 'profile.json'), { signer: async () => key });
     client.save({ alias: key.alias, keyId: key.keyId, peerId: 'phone', controlHostId: 'control', endpoint: await start('control'), dataHostId: 'data', dataEndpoint: await start('data'), dataSpace: 'jobs', state: 'paired' });
     const reply = await client.call('objects'); assert.equal(reply.result.objects[0].type, 'AcceptanceObject');
     assert.ok(calls.some(([host, method]) => host === 'control' && method === 'prove'));

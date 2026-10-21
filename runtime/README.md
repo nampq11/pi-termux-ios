@@ -36,8 +36,8 @@ internals.
   attachment owned by a generation, staged daemon provisioning with rollback,
   and the pi-durable ExecutionEnv over HTTP (`readlines` windows with a
   whole-file fallback for old env-servers).
-- `spaces-mobile.mjs`, `space-keystore.mjs` — Spaces pairing/control on the
-  phone, Android keystore signer.
+- `spaces-mobile.mjs`, `space-keys.mjs` — Spaces pairing/control on the
+  phone; P-256 device keys as PEM files in the private state dir.
 - `manual-remote-client.mjs` — manual smoke script against a pi-serverd socket.
 
 ## public/ (WebView pages)

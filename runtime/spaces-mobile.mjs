@@ -1,21 +1,21 @@
-// Keystore-backed pairing and own-key rotation. Plain enrollment tokens are never persisted.
+// Software-key pairing and own-key rotation. Plain enrollment tokens are never persisted.
 import { readFileSync, mkdirSync, renameSync, writeFileSync, chmodSync, lstatSync, openSync, fsyncSync, closeSync, unlinkSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { RemoteSpace, socketTransport } from './pi-spaces.mjs';
-import { androidSigner, createAndroidSigner, keyStoreCall } from './space-keystore.mjs';
+import { createSpaceKeys } from './space-keys.mjs';
 // Admin commands the phone may send into the control Space. The coordinator's supervisor checks the admin key;
 // this list only keeps the phone from sending kinds it has no view for.
 export const ADMIN_KINDS = new Set(['listRuns', 'runStatus', 'startRun', 'pauseRun', 'resumeRun', 'stopRun', 'reconcileRun', 'resolveRunRecovery', 'listWorkers', 'setWorkers', 'createSpace', 'archiveSpace', 'reactivateSpace', 'deleteSpace', 'planDeployment', 'exportDeployment', 'startWorkers', 'listAlerts', 'auditLog', 'exportRun', 'scheduleRun']);
 const FINAL = new Set(['completed', 'failed', 'duplicate']);
 const readResult = async (remote, commandId) => (await remote.readAll({ type: 'Result', fields: { commandId } }))[0]?.fields ?? null;
 export class MobileSpaces {
-  constructor(file, keys = { androidSigner, createAndroidSigner, keyStoreCall }) { this.file = file; this.keys = keys; this.busy = false; }
+  constructor(file, keys = createSpaceKeys(join(dirname(file), 'space-keys'))) { this.file = file; this.keys = keys; this.busy = false; }
   read() { try { const stat = lstatSync(this.file); if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077)) throw new Error('space profile must be private'); return JSON.parse(readFileSync(this.file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
   save(profile) { mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 }); const next = this.file + '.' + process.pid + '.' + Date.now() + '.next'; let fd; try { fd = openSync(next, 'wx', 0o600); writeFileSync(fd, JSON.stringify(profile) + '\n'); fsyncSync(fd); closeSync(fd); fd = undefined; renameSync(next, this.file); fd = openSync(dirname(this.file), 'r'); fsyncSync(fd); } finally { if (fd !== undefined) closeSync(fd); try { unlinkSync(next); } catch {} } }
   async serial(fn) { if (this.busy) throw new Error('another space operation is in progress'); this.busy = true; try { return await fn(); } finally { this.busy = false; } }
   async connect(profile, alias = profile.alias, data = false) {
-    const signer = await this.keys.androidSigner(alias), endpoint = data ? profile.dataEndpoint : profile.endpoint, host = data ? profile.dataHostId : profile.controlHostId;
+    const signer = await this.keys.signer(alias), endpoint = data ? profile.dataEndpoint : profile.endpoint, host = data ? profile.dataHostId : profile.controlHostId;
     if (!endpoint || !host) throw new Error('endpoint and trusted host identity are required');
     const url = new URL(endpoint); if (url.protocol !== 'tcp:' || !url.hostname || !url.port || url.username || url.password || url.search || url.hash) throw new Error('use tcp://OVERLAY-IP:PORT');
     const socket = socketTransport({ host: url.hostname.replace(/^\[|\]$/g, ''), port: Number(url.port) });
@@ -29,17 +29,17 @@ export class MobileSpaces {
   async call(method, body = {}) {
     return this.serial(async () => {
       let profile = this.read();
-      if (method === 'status') return { profile, keystore: !!process.env.PI_SPACES_KEY_SOCKET };
+      if (method === 'status') return { profile, keys: 'software' };
       if (method === 'prepare') {
         if (profile) throw new Error('an identity is already prepared; resolve its pending operation first');
         if (![body.peerId, body.controlHostId].every(v => typeof v === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(v))) throw new Error('peer and control host identity are required');
         const url = new URL(body.endpoint); if (url.protocol !== 'tcp:' || !url.port || url.username || url.password || url.search || url.hash) throw new Error('invalid control endpoint');
-        const key = await this.keys.createAndroidSigner(body.peerId, body.controlHostId);
+        const key = await this.keys.createSigner(body.peerId);
         profile = { peerId: body.peerId, controlHostId: body.controlHostId, endpoint: body.endpoint, controlSpaceId: body.controlSpaceId || null, alias: key.alias, keyId: key.keyId, publicKey: key.publicKey, state: 'prepared' };
         this.save(profile); return { profile };
       }
       if (!profile) throw new Error('prepare the device identity first');
-      if (method === 'dataHost') { if (!body.hostId || !body.endpoint || !body.space) throw new Error('host, endpoint and space are required'); const url = new URL(body.endpoint); if (url.protocol !== 'tcp:' || !url.port || url.username || url.password) throw new Error('invalid data endpoint'); await this.keys.keyStoreCall({ method: 'allowHost', alias: profile.alias, gateHostId: body.hostId }); Object.assign(profile, { dataHostId: body.hostId, dataEndpoint: body.endpoint, dataSpace: body.space }); this.save(profile); return { profile }; }
+      if (method === 'dataHost') { if (!body.hostId || !body.endpoint || !body.space) throw new Error('host, endpoint and space are required'); const url = new URL(body.endpoint); if (url.protocol !== 'tcp:' || !url.port || url.username || url.password) throw new Error('invalid data endpoint'); Object.assign(profile, { dataHostId: body.hostId, dataEndpoint: body.endpoint, dataSpace: body.space }); this.save(profile); return { profile }; }
       if (method === 'rotate' && profile.rotation?.request) throw new Error('resolve the pending rotation before starting another');
       if (method === 'enroll' && (profile.state === 'paired' || profile.rotation)) throw new Error('device is already paired');
       if (['admin', 'result', 'operations'].includes(method) && profile.state !== 'paired') throw new Error('pair the device as admin first');
@@ -127,8 +127,7 @@ export class MobileSpaces {
         }
         if (method === 'objects') return { result: { info: await remote.info(), stats: await remote.stats(), objects: await remote.readAll(null, { limit: 100 }) }, profile };
         if (method === 'rotate') {
-          const replacement = profile.rotation ? await this.keys.androidSigner(profile.rotation.alias) : await this.keys.createAndroidSigner(profile.peerId, profile.controlHostId);
-          if (profile.dataHostId) await this.keys.keyStoreCall({ method: 'allowHost', alias: replacement.alias, gateHostId: profile.dataHostId });
+          const replacement = profile.rotation ? await this.keys.signer(profile.rotation.alias) : await this.keys.createSigner(profile.peerId);
           profile.rotation = { alias: replacement.alias, keyId: replacement.keyId, publicKey: replacement.publicKey }; this.save(profile);
           const challenge = await remote.rotationChallenge(replacement.algorithm, replacement.publicKey); profile.rotation.challenge = challenge; this.save(profile);
           const result = await remote.rotateKey(challenge, replacement, { beforeSend: async request => { profile.rotation.request = request; this.save(profile); } });
