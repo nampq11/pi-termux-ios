@@ -64,22 +64,6 @@ struct RemoteView: View {
                     hostTitleButton(remote)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    if remote.connected || remote.connecting {
-                        Button {
-                            haptic()
-                            Task {
-                                if remote.connected || remote.connecting {
-                                    await remote.disconnectHost()
-                                } else if let selectedTarget {
-                                    await remote.connectHost(selectedTarget)
-                                }
-                            }
-                        } label: {
-                            Text(remote.connecting ? "Cancel" : "Disconnect")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(remote.connected ? .red : .primary)
-                        }
-                    }
                     Button {
                         haptic()
                         model.showSettings = true
@@ -202,7 +186,9 @@ struct RemoteView: View {
                 Button {
                     haptic()
                     Task {
-                        if let selectedTarget {
+                        if remote.connecting {
+                            await remote.disconnectHost()
+                        } else if let selectedTarget {
                             await remote.connectHost(selectedTarget)
                         }
                     }
@@ -212,17 +198,20 @@ struct RemoteView: View {
                             ProgressView()
                                 .tint(.white)
                                 .controlSize(.small)
+                            Text("Cancel Connecting")
+                                .font(.subheadline.weight(.semibold))
                         } else {
                             Image(systemName: "antenna.radiowaves.left.and.right")
+                            Text("Connect to Host")
+                                .font(.subheadline.weight(.semibold))
                         }
-                        Text(remote.connecting ? "Connecting to host…" : "Connect to Host")
-                            .font(.subheadline.weight(.semibold))
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(selectedTarget == nil || remote.connecting)
+                .tint(remote.connecting ? .red : Color.accentColor)
+                .disabled(selectedTarget == nil)
             }
             .padding(16)
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -276,15 +265,8 @@ struct RemoteView: View {
                 }
             }
         } label: {
-            HStack(spacing: 5) {
-                Text("🖥️ \(selectedTarget.map(basename) ?? "Remote")")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.blue)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.blue.opacity(0.12), in: Capsule())
-
-                Text(remote.sessions.first { $0.id == remote.attachedId }?.label ?? "Remote")
+            HStack(spacing: 4) {
+                Text(hostLabel)
                     .font(.headline)
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
@@ -293,16 +275,37 @@ struct RemoteView: View {
                 if remote.connected {
                     Circle()
                         .fill(Color.green)
-                        .frame(width: 7, height: 7)
+                        .frame(width: 6, height: 6)
                 }
             }
-            .frame(maxWidth: 220)
+            .frame(maxWidth: 150)
         }
         .tint(.primary)
         .accessibilityLabel("Select environment")
     }
+
+    private var hostLabel: String {
+        if let target = selectedTarget {
+            if let host = model.clients.hosts.first(where: { $0.target == target }) {
+                return "🖥️ \(host.name)"
+            }
+            let hostPart = target.split(separator: "@").last.map(String.init) ?? target
+            let cleanHost = hostPart.split(separator: ":").first.map(String.init) ?? hostPart
+            return "🖥️ \(cleanHost)"
+        }
+        return "🖥️ Remote"
+    }
     private func sessionMenu(_ remote: RemoteModel) -> some View {
         Menu {
+            if remote.connected || remote.connecting {
+                Section {
+                    Button(role: .destructive) {
+                        Task { await remote.disconnectHost() }
+                    } label: {
+                        Label(remote.connecting ? "Cancel Connecting" : "Disconnect", systemImage: "xmark.circle")
+                    }
+                }
+            }
             Section("Sessions") {
                 ForEach(remote.sessions) { session in
                     Button {
