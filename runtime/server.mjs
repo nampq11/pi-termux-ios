@@ -24,6 +24,7 @@ import { setSshBackend, sshBackend } from './ssh-transport.mjs';
 import { jsSshBackend } from './ssh-js-backend.mjs';
 import { acquireOwnerLock, readJson, writeFileAtomic } from './fileio.mjs';
 import { deleteSession, importLegacySessions, renameSession, sessionName } from './session-ops.mjs';
+import { semverNewer } from './semver.mjs';
 import {
   agentOf, createCredentialStore, createModelCatalog, ensureModel, isBusy,
   openHarness, pickModel, requestIdOf, sessionStore, Subagent, whenBusyOf,
@@ -379,8 +380,7 @@ async function handleApi(req, res, url, p) {
   if (p === '/api/pi-version' && req.method === 'GET') {
     const installed = piInstalledVersion();
     const latest = await piLatestVersion();
-    const semverGt = (a, b) => { if (!a || !b) return false; const p = (v) => v.split('.').map(Number); const [A,B] = [p(a),p(b)]; for (let i=0;i<3;i++) { if ((B[i]||0) > (A[i]||0)) return true; if ((B[i]||0) < (A[i]||0)) return false; } return false; };
-    return json(res, 200, { installed, latest, updateAvailable: semverGt(installed, latest) });
+    return json(res, 200, { installed, latest, updateAvailable: semverNewer(installed, latest) });
   }
   if (p === '/api/pi-update' && req.method === 'POST') {
     return json(res, 200, { started: startPiUpdate() });
@@ -722,6 +722,7 @@ const REMOTE_PI_SCRIPT = [
   'else',
   ' if command -v npm >/dev/null 2>&1; then',
   '  have=$(pi --version 2>/dev/null | head -n 1); latest=$(npm view "$PKG" version --fetch-timeout=10000 --fetch-retries=1 2>/dev/null | head -n 1);',
+  // shell-side twin of semver.mjs's semverNewer (this node -e runs on the remote host): keep in step
   '  if [ -n "$latest" ] && node -e "const p=s=>String(s).match(/^([0-9]+)\\.([0-9]+)\\.([0-9]+)/)?.slice(1).map(Number); const [a,b]=process.argv.slice(1).map(p); let c=0; if(a&&b) for(let i=0;i<3;i++) if(a[i]!==b[i]) { c=b[i]-a[i]; break; } process.exit(c>0?0:1)" "$have" "$latest"; then',
   '   echo "updating pi: $have -> $latest ..."; npm install -g --prefix "$HOME/.local" "$PKG@latest" || echo "pi update failed; starting $have";',
   '  elif [ -z "$latest" ]; then echo "could not check for pi updates; starting $have"; fi;',
