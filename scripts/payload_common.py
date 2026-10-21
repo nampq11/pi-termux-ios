@@ -74,18 +74,58 @@ def check_import_closures():
                 raise SystemExit(f'public/{page.name} imports missing file: {spec}')
 
 
+BUNDLE_STAMP = RUNTIME / 'pi-spaces.stamp'
+
+
+def bundle_revision():
+    """Provenance of the committed pi-spaces.mjs: the source revision recorded
+    by the last refresh ('' when no stamp exists)."""
+    try:
+        return BUNDLE_STAMP.read_text().strip()
+    except OSError:
+        return ''
+
+
+def _source_revision():
+    """Current revision of the pi-spaces checkout, '-dirty' appended when local
+    changes would end up in the bundle ('unknown' when not a git checkout)."""
+    git = ['git', '-C', str(SOURCE)]
+    try:
+        rev = subprocess.run(git + ['rev-parse', 'HEAD'], capture_output=True, text=True,
+                             check=True).stdout.strip()
+        dirty = subprocess.run(git + ['status', '--porcelain'], capture_output=True, text=True,
+                               check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return 'unknown'
+    return f'{rev}-dirty' if dirty else rev
+
+
 def refresh_pi_spaces_bundle():
-    """Rebuild pi-spaces.mjs from the sibling source checkout when available."""
-    source_available = (SOURCE / 'scripts/bundle-mobile.mjs').is_file()
-    if not source_available:
+    """Rebuild pi-spaces.mjs from the sibling source checkout when available,
+    stamp the bundle's provenance, and fail the build when the committed
+    bundle is stale: a silently refreshed bundle would ship pi-spaces behavior
+    that was never reviewed into this repo."""
+    if not (SOURCE / 'scripts/bundle-mobile.mjs').is_file():
+        rev = bundle_revision()
+        provenance = f'revision {rev[:12]}' if rev else 'UNKNOWN provenance'
         print(f'WARNING: pi-spaces source checkout missing or incompatible: {SOURCE}; '
-              'using existing mobile bundles without refreshing them. Set PI_SPACES_SOURCE to enable refresh.',
-              file=sys.stderr)
+              f'using the existing mobile bundle ({provenance}) without refreshing it. '
+              'Set PI_SPACES_SOURCE to enable refresh.', file=sys.stderr)
         return
+    before = digest(RUNTIME / 'pi-spaces.mjs') if (RUNTIME / 'pi-spaces.mjs').is_file() else None
     subprocess.run(['npm', 'run', 'bundle'], cwd=SOURCE, check=True,
                    env={**os.environ, 'PI_SPACES_MOBILE_ROOT': str(ROOT)})
     if not (RUNTIME / 'pi-spaces.mjs').is_file():
         raise SystemExit('Required mobile bundle missing: pi-spaces.mjs; prepare it from a pi-spaces source checkout first')
+    revision = _source_revision()
+    BUNDLE_STAMP.write_text(revision + '\n')
+    print(f'pi-spaces.mjs refreshed from {revision}')
+    if before is not None and before != digest(RUNTIME / 'pi-spaces.mjs'):
+        raise SystemExit(
+            'pi-spaces.mjs differs from the committed bundle after refreshing from '
+            f'{SOURCE}: the source checkout has moved ahead. Commit the refreshed bundle '
+            'and pi-spaces.stamp and rerun, or point PI_SPACES_SOURCE at the revision '
+            'the committed bundle was built from.')
 
 
 def check_runtime_inputs():
@@ -94,7 +134,7 @@ def check_runtime_inputs():
         raise SystemExit('Mobile runtime dependencies missing; install the locked runtime dependencies first')
     check_import_closures()
     for name in FILES:
-        if name not in ('pi-spaces.mjs', 'space-examples') and not (RUNTIME / name).exists():
+        if name != 'space-examples' and not (RUNTIME / name).exists():
             raise SystemExit(f'Required runtime input missing: {name}')
     if (RUNTIME / 'space-examples').is_dir():
         FILES.append('space-examples')
