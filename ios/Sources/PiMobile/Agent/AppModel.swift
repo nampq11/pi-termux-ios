@@ -60,23 +60,16 @@ public final class AppModel {
     public var currentEnvironment: AppEnvironment = .local
     public var showSettings = false
     public var showSidebar = false
+    public var agentDraft = "" // local composer text; survives env switches
 
     public func switchEnvironment(_ env: AppEnvironment) {
         haptic()
         currentEnvironment = env
+        // switchHost serializes on the main actor: a live or in-flight session
+        // on this host is kept, another host is torn down first — rapid taps
+        // can no longer land the connection on a host the UI does not show.
         if case .remote(let target) = env {
-            // Live session on this host: keep it. Bouncing Local ⇄ Remote must
-            // not force a full disconnect/reconnect (the transcript poll keeps
-            // running while the Remote view is off-screen).
-            if remote.connected, remote.connectedTarget == target { return }
-            if remote.connected || remote.connecting {
-                Task {
-                    await remote.disconnectHost()
-                    await remote.connectHost(target)
-                }
-            } else {
-                Task { await remote.connectHost(target) }
-            }
+            Task { await remote.switchHost(target) }
         }
     }
     public let api = BridgeAPI()

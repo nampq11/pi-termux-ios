@@ -7,7 +7,6 @@ import SwiftUI
 struct RemoteView: View {
     @Environment(AppModel.self) private var model
     @State private var selectedTarget: String?
-    @State private var draft = ""
     @State private var steer = false
     @State private var renaming: RemoteSession?
     @State private var renameText = ""
@@ -79,8 +78,13 @@ struct RemoteView: View {
             .task {
                 await model.clients.loadAll()
                 // The view is recreated on every environment switch, so
-                // @State is lost: restore from the live session first.
-                if selectedTarget == nil { selectedTarget = remote.connectedTarget ?? model.clients.hosts.first?.target }
+                // @State is lost: restore from the live or in-flight session
+                // first (a connect started from the Agent menu has no
+                // connectedTarget yet), then keep following the live host.
+                if selectedTarget == nil { selectedTarget = remote.connectingTarget ?? remote.connectedTarget ?? model.clients.hosts.first?.target }
+            }
+            .onChange(of: remote.connectedTarget) { _, target in
+                if let target, selectedTarget != target { selectedTarget = target }
             }
             .alert(alertTitle,
                    isPresented: Binding(
@@ -263,13 +267,10 @@ struct RemoteView: View {
                 }
                 ForEach(model.clients.hosts) { host in
                     Button {
-                        if selectedTarget != host.target {
-                            if remote.connected || remote.connecting {
-                                Task { await remote.disconnectHost() }
-                            }
-                            selectedTarget = host.target
-                            model.switchEnvironment(.remote(target: host.target))
-                        }
+                        selectedTarget = host.target
+                        // switchHost owns teardown: no inline disconnect here,
+                        // it would race switchEnvironment's own disconnect.
+                        model.switchEnvironment(.remote(target: host.target))
                     } label: {
                         if host.target == selectedTarget {
                             Label(host.name, systemImage: "checkmark")
@@ -391,7 +392,8 @@ struct RemoteView: View {
     // MARK: - Composer
 
     private func composer(_ remote: RemoteModel) -> some View {
-        VStack(spacing: 8) {
+        @Bindable var remote = remote // draft binding ($remote.draft)
+        return VStack(spacing: 8) {
             // Header status row: connection link, usage, steer toggle, compact
             HStack(spacing: 8) {
                 StatusPill(remote.link == "reconnecting" ? .warning : remote.busy ? .running : .success,
@@ -430,7 +432,7 @@ struct RemoteView: View {
 
             // Text input and Send/Stop morphing button
             HStack(alignment: .bottom, spacing: 8) {
-                TextField(remote.busy ? "Steer running request…" : "Message remote pi…", text: $draft, axis: .vertical)
+                TextField(remote.busy ? "Steer running request…" : "Message remote pi…", text: $remote.draft, axis: .vertical)
                     .lineLimit(1...5)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -438,7 +440,7 @@ struct RemoteView: View {
                     .submitLabel(.send)
                     .onSubmit { send(remote) }
 
-                if remote.busy && draft.isEmpty {
+                if remote.busy && remote.draft.isEmpty {
                     Button {
                         haptic()
                         Task { await remote.abort() }
@@ -455,9 +457,9 @@ struct RemoteView: View {
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 34))
-                            .foregroundStyle(!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.accentColor : Color.secondary.opacity(0.3))
+                            .foregroundStyle(!remote.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.accentColor : Color.secondary.opacity(0.3))
                     }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(remote.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityLabel("Send message")
                     .transition(.scale.combined(with: .opacity))
                 }
@@ -475,10 +477,10 @@ struct RemoteView: View {
     }
 
     private func send(_ remote: RemoteModel) {
-        let text = draft
+        let text = remote.draft
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         haptic()
-        draft = ""
+        remote.draft = ""
         Task { await remote.sendPrompt(text, steer: steer) }
     }
 

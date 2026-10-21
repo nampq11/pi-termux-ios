@@ -12,7 +12,6 @@ public func joinPath(_ a: String, _ b: String) -> String {
 public struct AgentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var draft = ""
     @State private var renaming: AgentConversation?
     @State private var consent: SharingConsent?
     @FocusState private var composing: Bool
@@ -164,7 +163,7 @@ public struct AgentView: View {
             ) { c in
                 Button("Allow") {
                     model.agentAllowSharing(c.provider)
-                    draft = ""
+                    model.agentDraft = ""
                     model.agentSend(c.text)
                 }
                 Button("Cancel", role: .cancel) {}
@@ -258,7 +257,7 @@ public struct AgentView: View {
     private func suggestionChip(_ text: String) -> some View {
         Button {
             haptic()
-            draft = text
+            model.agentDraft = text
         } label: {
             HStack {
                 Text(text)
@@ -295,7 +294,8 @@ public struct AgentView: View {
 
     /// Floating bottom composer capsule
     private func composer(_ state: AgentState) -> some View {
-        VStack(spacing: 8) {
+        @Bindable var model = model // draft binding ($model.agentDraft)
+        return VStack(spacing: 8) {
             // Context header row: the model picker's single home (the ⋯ menu
             // no longer duplicates it). Shown whenever models are configured;
             // "Model" placeholder when none is selected so the entry point
@@ -340,7 +340,7 @@ public struct AgentView: View {
 
             // Text input and morphing action button
             HStack(alignment: .bottom, spacing: 8) {
-                TextField(state.busy ? "Add instructions while running…" : "Message pi…", text: $draft, axis: .vertical)
+                TextField(state.busy ? "Add instructions while running…" : "Message pi…", text: $model.agentDraft, axis: .vertical)
                     .lineLimit(1...5)
                     .focused($composing)
                     .padding(.horizontal, 14)
@@ -348,7 +348,7 @@ public struct AgentView: View {
                     .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .submitLabel(.send)
 
-                if state.busy && draft.isEmpty {
+                if state.busy && model.agentDraft.isEmpty {
                     Button {
                         haptic()
                         model.agentStop()
@@ -385,11 +385,11 @@ public struct AgentView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !model.agentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = model.agentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         haptic()
         let state = model.agent.state
@@ -398,7 +398,7 @@ public struct AgentView: View {
             consent = SharingConsent(provider: m.provider, providerName: name, project: state.project.map(displayName) ?? "this folder", text: text)
             return
         }
-        draft = ""
+        model.agentDraft = ""
         model.agentSend(text)
     }
 }
