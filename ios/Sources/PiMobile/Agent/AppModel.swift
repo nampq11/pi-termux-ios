@@ -31,6 +31,7 @@ public final class AppModel {
     public var agentModels: [AgentModelOption] = []
     public var agentAccounts: [AgentAccount] = []
     public var clients = ClientsModel()
+    public var keyInstall = KeyInstallModel()
 
     public var agentListShown = false
     public var agentAccountsShown = false
@@ -60,6 +61,7 @@ public final class AppModel {
     public func connect(url: URL) {
         api.configure(url: url)
         clients.attach(api)
+        keyInstall.attach(api)
         startEventStream()
         Task {
             await loadAgentAccounts()

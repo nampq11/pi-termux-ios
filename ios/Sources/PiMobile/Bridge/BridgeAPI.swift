@@ -33,6 +33,16 @@ public final class BridgeAPI {
 
     // MARK: - HTTP Helpers
 
+    /// A ws(s):// URL for a bridge path (the /pty terminal stream); the
+    /// session token is always appended.
+    public func webSocketURL(path: String, query: [URLQueryItem] = []) -> URL? {
+        guard let baseURL,
+              var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else { return nil }
+        comps.scheme = comps.scheme == "https" ? "wss" : "ws"
+        comps.queryItems = query + [URLQueryItem(name: "token", value: token)]
+        return comps.url
+    }
+
     public func request(path: String, method: String, body: [String: Any]? = nil) throws -> URLRequest {
         guard let baseURL else {
             throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Bridge not ready"])

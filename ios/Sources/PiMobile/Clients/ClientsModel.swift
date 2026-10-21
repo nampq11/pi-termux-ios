@@ -2,8 +2,8 @@ import Foundation
 import Observation
 
 // Native port of the web clients page: saved SSH targets and the device's
-// ed25519 keypair. Key installs go through the password flow (POST
-// /api/ssh-copy-id) because iOS has no PTY for interactive ssh-copy-id.
+// ed25519 keypair. Key installs live in KeyInstallModel, shared with the
+// terminal's pre-connection check.
 
 public struct ClientHost: Identifiable, Equatable, Sendable {
     public var id: String { name }
@@ -24,16 +24,7 @@ public final class ClientsModel {
     public var keyPubkey: String?
     public var message: String?
 
-    // The ⇧key flow: confirm dialog, then up to three password attempts.
-    public var copyIdHost: ClientHost?
-    public var copyIdPhase: CopyIdPhase = .idle
-    public var copyIdError: String?
-    public var passwordRejected = false
-
-    public enum CopyIdPhase: Equatable { case idle, confirm, password }
-
     private weak var api: BridgeAPI?
-    private var copyIdAttempts = 0
 
     public init() {}
 
@@ -80,23 +71,20 @@ public final class ClientsModel {
         await loadKey()
     }
 
-    /// Adds a host and runs the web page's auto-flow: ensure the device key
-    /// exists, then offer to install it on the new host.
-    public func addHost(name: String, target: String) async -> Bool {
-        guard let api else { return false }
+    /// Adds a host; the caller runs the web page's auto-flow (offer the key
+    /// install via KeyInstallModel) using the returned host.
+    public func addHost(name: String, target: String) async -> ClientHost? {
+        guard let api else { return nil }
         do {
             let res: [String: Any] = try await api.post("/api/clients", body: ["name": name, "target": target])
-            guard res["ok"] as? Bool == true else { return false }
+            guard res["ok"] as? Bool == true else { return nil }
             message = "added"
             await loadAll()
             if !keyExists { await generateKey() }
-            if let host = hosts.first(where: { $0.target == target }) {
-                beginInstallKey(host)
-            }
-            return true
+            return hosts.first(where: { $0.target == target })
         } catch {
             message = "error: \(error.localizedDescription)"
-            return false
+            return nil
         }
     }
 
@@ -104,50 +92,5 @@ public final class ClientsModel {
         guard let api else { return }
         _ = try? await api.post("/api/clients", body: ["delete": host.name]) as [String: Any]
         await loadAll()
-    }
-
-    // MARK: - Key Install (the web authprompt.js flow)
-
-    public func beginInstallKey(_ host: ClientHost) {
-        copyIdHost = host
-        copyIdPhase = .confirm
-        copyIdAttempts = 0
-        passwordRejected = false
-    }
-
-    public func confirmInstallKey() {
-        copyIdPhase = .password
-        passwordRejected = false
-    }
-
-    public func cancelInstallKey() {
-        copyIdHost = nil
-        copyIdPhase = .idle
-        passwordRejected = false
-    }
-
-    /// One password attempt: success closes the flow, a rejected password
-    /// keeps the sheet open for the next attempt (three total, like the web).
-    public func submitPassword(_ password: String) async {
-        guard let api, let host = copyIdHost else { return }
-        copyIdAttempts += 1
-        do {
-            let res: [String: Any] = try await api.post("/api/ssh-copy-id", body: ["target": host.target, "password": password])
-            if res["ok"] as? Bool == true {
-                cancelInstallKey()
-                message = "key installed on \(host.name)"
-                return
-            }
-            let authFailed = res["authFailed"] as? Bool ?? false
-            if authFailed && copyIdAttempts < 3 {
-                passwordRejected = true
-                return
-            }
-            cancelInstallKey()
-            copyIdError = authFailed ? "password rejected" : (res["error"] as? String ?? "key installation failed")
-        } catch {
-            cancelInstallKey()
-            copyIdError = error.localizedDescription
-        }
     }
 }

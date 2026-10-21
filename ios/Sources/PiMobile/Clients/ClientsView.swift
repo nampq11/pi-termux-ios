@@ -1,14 +1,16 @@
 import SwiftUI
 
 // Native port of the web clients page: the device key section, the saved
-// hosts, and the ⇧key password flow for installing the key on a host.
+// hosts, and their two actions — open a pi CLI terminal over ssh, and
+// install the device key (the dialogs live in MainTabView, shared with the
+// terminal screen).
 
 public struct ClientsView: View {
     @Environment(AppModel.self) private var model
     @State private var adding = false
     @State private var draftName = ""
     @State private var draftTarget = ""
-    @State private var password = ""
+    @State private var terminalTarget: String?
 
     public init() {}
 
@@ -18,7 +20,7 @@ public struct ClientsView: View {
             List {
                 keySection(clients)
                 hostsSection(clients)
-                if let message = clients.message {
+                if let message = clients.message ?? model.keyInstall.notice {
                     Section { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 }
             }
@@ -33,31 +35,15 @@ public struct ClientsView: View {
             .task { await clients.loadAll() }
             .refreshable { await clients.loadAll() }
             .sheet(isPresented: $adding) { addSheet(clients) }
-            .confirmationDialog(
-                "Install the device key on \(clients.copyIdHost?.name ?? "")?",
-                isPresented: copyIdBinding(clients, .confirm),
-                titleVisibility: .visible
-            ) {
-                Button("Install key") { clients.confirmInstallKey() }
-                Button("Cancel", role: .cancel) { clients.cancelInstallKey() }
-            } message: {
-                Text("The key lets this device sign in to \(clients.copyIdHost?.target ?? "") without a password.")
-            }
-            .sheet(isPresented: copyIdBinding(clients, .password)) { passwordSheet(clients) }
-            .alert("Key installation failed",
-                   isPresented: Binding(get: { clients.copyIdError != nil }, set: { if !$0 { clients.copyIdError = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(clients.copyIdError ?? "")
+            .navigationDestination(isPresented: Binding(
+                get: { terminalTarget != nil },
+                set: { if !$0 { terminalTarget = nil } }
+            )) {
+                if let terminalTarget {
+                    TerminalScreen(target: terminalTarget)
+                }
             }
         }
-    }
-
-    private func copyIdBinding(_ clients: ClientsModel, _ phase: ClientsModel.CopyIdPhase) -> Binding<Bool> {
-        Binding(
-            get: { clients.copyIdPhase == phase && clients.copyIdHost != nil },
-            set: { if !$0 && clients.copyIdPhase == phase { clients.cancelInstallKey() } }
-        )
     }
 
     private func keySection(_ clients: ClientsModel) -> some View {
@@ -93,7 +79,14 @@ public struct ClientsView: View {
                     }
                     Spacer()
                     Button {
-                        clients.beginInstallKey(host)
+                        terminalTarget = host.target
+                    } label: {
+                        Image(systemName: "terminal")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Open pi CLI on \(host.name)")
+                    Button {
+                        model.keyInstall.begin(target: host.target)
                     } label: {
                         Image(systemName: "key")
                     }
@@ -106,7 +99,8 @@ public struct ClientsView: View {
                     }
                 }
                 .contextMenu {
-                    Button { clients.beginInstallKey(host) } label: { Label("Copy key…", systemImage: "key") }
+                    Button { terminalTarget = host.target } label: { Label("Open terminal", systemImage: "terminal") }
+                    Button { model.keyInstall.begin(target: host.target) } label: { Label("Copy key…", systemImage: "key") }
                     Button(role: .destructive) { Task { await clients.deleteHost(host) } } label: { Label("Delete", systemImage: "trash") }
                 }
             }
@@ -141,50 +135,17 @@ public struct ClientsView: View {
                         guard !target.isEmpty else { return }
                         adding = false
                         draftName = ""; draftTarget = ""
-                        Task { _ = await clients.addHost(name: name, target: target) }
+                        Task {
+                            // Web auto-flow: ensure the key exists, then offer the install.
+                            if let host = await clients.addHost(name: name, target: target) {
+                                model.keyInstall.begin(target: host.target)
+                            }
+                        }
                     }
                     .disabled(draftTarget.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
         .presentationDetents([.medium])
-    }
-
-    private func passwordSheet(_ clients: ClientsModel) -> some View {
-        NavigationStack {
-            Form {
-                SecureField("password", text: $password)
-                    .onSubmit { submitPassword(clients) }
-                if clients.passwordRejected {
-                    Text("wrong password — try again")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .navigationTitle("Password for \(clients.copyIdHost?.target ?? "")")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        clients.cancelInstallKey()
-                        password = ""
-                    }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Install key") { submitPassword(clients) }
-                        .disabled(password.isEmpty)
-                }
-            }
-        }
-        .presentationDetents([.medium])
-        .onChange(of: clients.passwordRejected) { _, rejected in
-            if rejected { password = "" }
-        }
-    }
-
-    private func submitPassword(_ clients: ClientsModel) {
-        let value = password
-        password = ""
-        Task { await clients.submitPassword(value) }
     }
 }
