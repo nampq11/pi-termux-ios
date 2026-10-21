@@ -72,6 +72,9 @@ public final class RemoteModel {
     public var usage = ""
     public var connected = false
     public var connecting = false
+    /// Host of the live connection; nil whenever `connected` is false. Lets
+    /// environment switches keep a live session instead of reconnecting.
+    public private(set) var connectedTarget: String?
     public var link = "disconnected"
     public var dialog: Dialog?
     public var connectError: String?
@@ -352,6 +355,7 @@ public final class RemoteModel {
         attachedId = nil
         link = "disconnected"
         connected = false
+        connectedTarget = nil
         clear()
         sessions = []
         models = []
@@ -432,6 +436,7 @@ public final class RemoteModel {
                 return
             }
             connected = true
+            connectedTarget = target
             var line = "connected: \(r["serverId"] as? String ?? "")"
             if let hostKey = r["hostKey"] as? String { line += " · host key \(hostKey)" }
             sys(line)

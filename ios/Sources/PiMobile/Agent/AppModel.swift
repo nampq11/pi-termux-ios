@@ -65,6 +65,10 @@ public final class AppModel {
         haptic()
         currentEnvironment = env
         if case .remote(let target) = env {
+            // Live session on this host: keep it. Bouncing Local ⇄ Remote must
+            // not force a full disconnect/reconnect (the transcript poll keeps
+            // running while the Remote view is off-screen).
+            if remote.connected, remote.connectedTarget == target { return }
             if remote.connected || remote.connecting {
                 Task {
                     await remote.disconnectHost()

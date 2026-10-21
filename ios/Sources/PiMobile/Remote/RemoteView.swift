@@ -78,7 +78,9 @@ struct RemoteView: View {
             }
             .task {
                 await model.clients.loadAll()
-                if selectedTarget == nil { selectedTarget = model.clients.hosts.first?.target }
+                // The view is recreated on every environment switch, so
+                // @State is lost: restore from the live session first.
+                if selectedTarget == nil { selectedTarget = remote.connectedTarget ?? model.clients.hosts.first?.target }
             }
             .alert(alertTitle,
                    isPresented: Binding(
