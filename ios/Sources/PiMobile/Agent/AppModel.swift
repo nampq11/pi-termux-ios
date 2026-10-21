@@ -103,6 +103,9 @@ public final class AppModel {
             await loadAgentAccounts()
             await loadAgentModels()
             await loadConversations()
+            // The ☰ drawer switches environments from this list; without it
+            // loaded here, a fresh launch in Local cannot reach Remote at all.
+            await clients.loadAll()
             if self.agent.state.model == nil, let first = self.agentModels.first {
                 self.agentSetModel(first)
             }
