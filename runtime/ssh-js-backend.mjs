@@ -206,7 +206,7 @@ export const jsSshBackend = {
    * the socket path (the listener binds asynchronously, like `ssh -N -L`),
    * retry policy, and teardown via kill(). A dropped SSH connection surfaces
    * as proc 'exit' (plus 'error' with the reason), matching process semantics. */
-  openTcpTunnel({ home, host, port, localPath, remoteHost = '127.0.0.1', remotePort }) {
+  openTcpTunnel({ home, host, port, localPath, localPort, remoteHost = '127.0.0.1', remotePort }) {
     const proc = new EventEmitter();
     proc.stderr = new EventEmitter();
     let server = null, dead = false;
@@ -217,16 +217,10 @@ export const jsSshBackend = {
       if (e) proc.emit('error', e);
       proc.emit('exit', 1);
     };
-    // Auth/trust identical to run(); the host key is already pinned by
-    // provisioning. The bind delay and ssh2 handshake race out like
-    // `ssh -N -L` does: the caller polls for the socket path, and each
-    // accepted connection awaits SSH readiness before forwardOut.
     const ready = connect({ host, port, home });
     ready.catch(die);
-    // the no-op catch: a handshake losing the race with kill() must not
-    // surface as an unhandled rejection — die() already reported the exit
     ready.then((c) => {
-      c.on('error', die); // an unhandled Client 'error' event would crash the bridge
+      c.on('error', die);
       c.on('close', () => die(new Error('ssh connection closed')));
     }).catch(() => {});
     server = net.createServer((socket) => {
@@ -245,11 +239,18 @@ export const jsSshBackend = {
       }).catch(() => socket.destroy());
     });
     server.on('error', die);
-    // stale socket file would EADDRINUSE the async bind, exactly like ssh -L
-    try { unlinkSync(localPath); } catch {}
-    server.listen(localPath);
+    if (localPath) {
+      try { unlinkSync(localPath); } catch {}
+      server.listen(localPath);
+    } else {
+      server.listen(localPort ?? 0, '127.0.0.1', () => {
+        proc.localPort = server.address()?.port;
+        proc.emit('listening', proc.localPort);
+      });
+    }
     return {
       proc,
+      get localPort() { return proc.localPort ?? server?.address()?.port; },
       kill: () => {
         try { server?.close(); } catch {}
         for (const s of sockets) { try { s.destroy(); } catch {} }

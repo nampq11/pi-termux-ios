@@ -87,8 +87,7 @@ final class RuntimeController: ObservableObject {
     /// Environment for the bridge (fixed loopback port, in-process engine).
     private func environment() -> [String: String] {
         [
-            "HOME": root.appendingPathComponent("home").path,
-            "TMPDIR": root.appendingPathComponent("tmp").path,
+            "TMPDIR": FileManager.default.temporaryDirectory.path,
             "PI_WORKDIR": root.appendingPathComponent("work").path,
             "PI_PORT": String(Self.bridgePort),
             "PI_PLATFORM": "ios",
