@@ -169,9 +169,10 @@ private struct TerminalCanvas: UIViewRepresentable {
         init(session: TerminalSession) { self.session = session }
 
         func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
+            // Only remember the grid: the pre-check gate (above) is what starts
+            // the stream. Auto-connecting here would race the trust/copy-auth/
+            // install-key decisions and connect regardless of them.
             session.setSize(cols: newCols, rows: newRows)
-            // First layout gives the real grid; start the stream at that size.
-            if session.state == .idle { session.connect() }
         }
 
         func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
