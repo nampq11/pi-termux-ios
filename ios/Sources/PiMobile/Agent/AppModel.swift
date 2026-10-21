@@ -476,31 +476,169 @@ public final class AppModel {
             ("minimax", "MiniMax", false)
         ]
 
-        var savedKeys = Set<String>()
+        // provider id → credential type ("oauth" | "api_key")
+        var savedTypes = [String: String]()
         do {
             let res: [String: Any] = try await api.get("/api/providers")
             if let list = res["providers"] as? [[String: Any]] {
                 for p in list {
-                    if let id = p["provider"] as? String { savedKeys.insert(id) }
+                    if let id = p["provider"] as? String {
+                        savedTypes[id] = p["type"] as? String ?? "api_key"
+                    }
                 }
             }
         } catch {}
 
-        if !savedKeys.isEmpty {
+        // Only providers the bridge offers an OAuth login for get a
+        // sign-in row (the web page fills its select from the same list).
+        var oauthLabels = [String: String]()
+        if let res = try? await api.get("/api/oauth/providers") as [String: Any],
+           let list = res["providers"] as? [[String: Any]] {
+            for p in list {
+                if let id = p["id"] as? String {
+                    oauthLabels[id] = (p["label"] as? String) ?? (p["name"] as? String) ?? id
+                }
+            }
+        }
+
+        if !savedTypes.isEmpty {
             agent.state.signedIn = true
         }
 
         agentAccounts = defaultProviders.map { id, name, featured in
-            AgentAccount(
+            let oauthLabel = oauthLabels[id]
+            return AgentAccount(
                 id: id,
                 name: name,
                 featured: featured,
+                oauthName: oauthLabel != nil ? name : nil,
+                oauthLabel: oauthLabel,
                 apiKeyName: "\(name) API Key",
-                signedIn: savedKeys.contains(id) ? "api_key" : nil
+                signedIn: savedTypes[id]
             )
         }
     }
+
+    /// The OAuth device/subscription flow from keys.js, rendered by
+    /// LoginFlowView: start, poll for events (browser URL, device code,
+    /// messages) and prompts, answer prompts, finish on done.
+    private func runOAuth(_ provider: String) async {
+        agentLoginError = nil
+        agentHost.beginLogin(provider)
+        agentHost.progress = ["starting sign-in…"]
+        do {
+            let started: [String: Any] = try await api.post("/api/oauth/start", body: ["provider": provider])
+            guard let loginId = started["id"] as? String else {
+                agentLoginError = (started["error"] as? String) ?? "could not start sign-in"
+                agentHost.endLogin()
+                return
+            }
+            var answeredPrompt: String?
+            var promptCount = 0
+            // Cancelling the sheet (endLogin) clears loginProvider, which
+            // ends the loop; the bridge keeps the login until it times out.
+            while agentHost.loginProvider != nil {
+                try await Task.sleep(nanoseconds: 600_000_000)
+                guard agentHost.loginProvider != nil else { return }
+                let state: [String: Any] = try await api.get(
+                    "/api/oauth/status",
+                    query: [URLQueryItem(name: "id", value: loginId)]
+                )
+                for event in state["events"] as? [[String: Any]] ?? [] {
+                    switch event["type"] as? String {
+                    case "auth_url":
+                        if let urlStr = event["url"] as? String {
+                            agentHost.progress.append("\(event["instructions"] as? String ?? "open sign-in page") — \(urlStr)")
+                            if let url = URL(string: urlStr) {
+                                _ = await UIApplication.shared.open(url)
+                            }
+                        }
+                    case "device_code":
+                        agentHost.deviceCode = AgentHost.DeviceCode(
+                            code: event["userCode"] as? String ?? "",
+                            uri: event["verificationUri"] as? String ?? ""
+                        )
+                    default:
+                        if let message = event["message"] as? String {
+                            agentHost.progress.append(message)
+                        }
+                    }
+                }
+                if let p = state["prompt"] as? [String: Any] {
+                    // The prompt id is an opaque string on the wire; the
+                    // display id only needs to differ between prompts.
+                    let rawId = String(describing: p["id"] ?? "")
+                    if rawId != answeredPrompt {
+                        answeredPrompt = rawId
+                        promptCount += 1
+                        let options = (p["options"] as? [[String: Any]])?.compactMap { o in
+                            AgentHost.Option(id: o["id"] as? String ?? "", label: o["label"] as? String ?? "")
+                        } ?? []
+                        let prompt = AgentHost.Prompt(
+                            id: promptCount,
+                            type: options.isEmpty ? ((p["type"] as? String) ?? "text") : "select",
+                            message: (p["message"] as? String) ?? "Enter the requested value.",
+                            placeholder: p["placeholder"] as? String,
+                            options: options
+                        )
+                        let value: String? = await withCheckedContinuation { cont in
+                            agentHost.showPrompt(prompt) { cont.resume(returning: $0) }
+                        }
+                        guard agentHost.loginProvider != nil else { return }
+                        _ = try await api.post("/api/oauth/respond", body: [
+                            "id": loginId,
+                            "promptId": rawId,
+                            "value": value ?? ""
+                        ]) as [String: Any]
+                    }
+                }
+                if state["done"] as? Bool == true {
+                    if let error = state["error"] as? String {
+                        agentLoginError = "error: \(error)"
+                    } else {
+                        agentHost.progress.append("signed in: \(provider)")
+                        await loadAgentAccounts()
+                        await loadAgentModels()
+                    }
+                    agentHost.endLogin()
+                    return
+                }
+            }
+        } catch {
+            agentLoginError = error.localizedDescription
+            agentHost.endLogin()
+        }
+    }
+
+    public struct PiVersionInfo: Equatable, Sendable {
+        public let installed: String
+        public let latest: String
+        public let updateAvailable: Bool
+        public let canUpdate: Bool
+    }
+
+    public var piVersion: PiVersionInfo?
+
+    public func loadPiVersion() async {
+        do {
+            let res: [String: Any] = try await api.get("/api/pi-version")
+            guard res["error"] == nil else { return }
+            piVersion = PiVersionInfo(
+                installed: res["installed"] as? String ?? "?",
+                latest: res["latest"] as? String ?? "?",
+                updateAvailable: res["updateAvailable"] as? Bool ?? false,
+                canUpdate: res["canUpdate"] as? Bool ?? false
+            )
+        } catch {
+            Self.log.error("loadPiVersion failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     public func agentLogin(_ provider: String, _ type: String) async {
+        if type == "oauth" {
+            await runOAuth(provider)
+            return
+        }
         agentLoginError = nil
         let prompt = AgentHost.Prompt(
             id: 1,

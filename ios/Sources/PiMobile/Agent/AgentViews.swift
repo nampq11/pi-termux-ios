@@ -557,10 +557,32 @@ public struct AccountsView: View {
             } footer: {
                 Text("Keys are sent to their provider.")
             }
+            Section("pi version") {
+                if let v = model.piVersion {
+                    HStack {
+                        Text(v.installed).font(.callout.monospaced())
+                        if v.updateAvailable {
+                            Image(systemName: "arrow.right").font(.caption).foregroundStyle(.secondary)
+                            // iOS cannot spawn npm; the updated runtime
+                            // arrives with an app release.
+                            Text(v.canUpdate ? v.latest : "\(v.latest) — ships with the next app release")
+                                .font(.callout.monospaced())
+                        } else {
+                            Spacer()
+                            Label("up to date", systemImage: "checkmark")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                }
+            }
         }
         .navigationTitle("Accounts")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.loadAgentAccounts() }
+        .task {
+            await model.loadAgentAccounts()
+            await model.loadPiVersion()
+        }
         .refreshable { await model.loadAgentAccounts() }
     }
 
