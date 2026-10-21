@@ -3,6 +3,22 @@
 // Wire format: POST <baseUrl>/<op> with bearer token, JSON in/out.
 // Result<T,E> = { ok: true, value } | { ok: false, error }.
 
+// lines fetched per readlines round trip; smaller windows stream sooner
+const LINE_WINDOW = 1000;
+
+/** Strict-LF split into { text, terminated } lines, matching the local env's
+ * reader: no phantom empty line after a trailing newline. */
+function splitLines(text) {
+  const out = [];
+  let start = 0;
+  for (let nl = text.indexOf('\n'); nl !== -1; nl = text.indexOf('\n', start)) {
+    out.push({ text: text.slice(start, nl), terminated: true });
+    start = nl + 1;
+  }
+  if (start < text.length) out.push({ text: text.slice(start), terminated: false });
+  return out;
+}
+
 export class RemoteExecutionEnv {
   constructor({ cwd, baseUrl, token, id }) {
     this.cwd = cwd;
@@ -99,24 +115,71 @@ export class RemoteExecutionEnv {
     return { ok: true, value: Buffer.from(r.value.contentB64, 'base64') };
   }
   async readTextLines(p, options, context) {
-    const r = await this.readTextFile(p, context);
-    if (!r.ok) return r;
-    let lines = r.value.split('\n');
-    if (options?.maxLines) lines = lines.slice(0, options.maxLines);
-    return { ok: true, value: lines };
+    if (options?.maxLines !== undefined && options.maxLines <= 0) return { ok: true, value: [] };
+    if (options?.maxLines === undefined) {
+      // caller wants everything: one plain read beats paging
+      const whole = await this.readTextFile(p, context);
+      if (!whole.ok) return whole;
+      return { ok: true, value: splitLines(whole.value).map((l) => l.text) };
+    }
+    // first-N: windowed reads transfer only the requested prefix
+    const paged = await this.#collectLines(p, options.maxLines, context);
+    if (paged.ok) return paged;
+    const whole = await this.readTextFile(p, context); // old env-server: no readlines op
+    if (!whole.ok) return whole;
+    return { ok: true, value: splitLines(whole.value).slice(0, options.maxLines).map((l) => l.text) };
+  }
+  /** Page `readlines` windows until `limit` lines or EOF; `!ok` on any failure. */
+  async #collectLines(p, limit, context) {
+    const out = [];
+    for (let start = 0; out.length < limit;) {
+      const r = await this.#call('fs', {
+        op: 'readlines', path: this.#abs(p), startLine: start, lineCount: Math.min(LINE_WINDOW, limit - out.length),
+      }, context);
+      if (!r.ok) return r;
+      for (const l of r.value.lines) out.push(l.text);
+      if (r.value.final || !r.value.lines.length) break;
+      start += r.value.lines.length;
+    }
+    return { ok: true, value: out };
   }
   async openTextLineReader(p, context) {
-    const r = await this.readTextFile(p, context);
-    if (!r.ok) return r;
-    const lines = r.value.split('\n');
+    const abs = this.#abs(p);
+    const win = await this.#call('fs', { op: 'readlines', path: abs, startLine: 0, lineCount: LINE_WINDOW }, context);
+    if (win.ok) {
+      // one buffered window at a time: refetch lazily as the reader advances
+      let buf = win.value.lines;
+      let next = buf.length;
+      let final = win.value.final;
+      let i = 0;
+      return { ok: true, value: {
+        readLine: async (c) => {
+          if (i >= buf.length) {
+            if (final) return { ok: true, value: undefined };
+            const r = await this.#call('fs', { op: 'readlines', path: abs, startLine: next, lineCount: LINE_WINDOW }, c);
+            if (!r.ok) return r;
+            buf = r.value.lines;
+            i = 0;
+            next += buf.length;
+            final = r.value.final;
+            if (!buf.length) return { ok: true, value: undefined };
+          }
+          return { ok: true, value: buf[i++] };
+        },
+        close: async () => {},
+      } };
+    }
+    // old env-server (no readlines op): one whole-file read served from memory
+    const whole = await this.readTextFile(p, context);
+    if (!whole.ok) return whole;
+    const lines = splitLines(whole.value);
     let i = 0;
-    const reader = {
+    return { ok: true, value: {
       readLine: async () => i < lines.length
-        ? { ok: true, value: { text: lines[i++], terminated: i < lines.length } }
+        ? { ok: true, value: lines[i++] }
         : { ok: true, value: undefined },
       close: async () => {},
-    };
-    return { ok: true, value: reader };
+    } };
   }
   async writeFile(p, content, context) {
     return this.#fsOp('write', p, { contentB64: Buffer.from(content).toString('base64') }, context);

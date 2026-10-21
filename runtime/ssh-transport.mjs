@@ -32,6 +32,36 @@ export function sshBaseOptions(home, port) {
     ...(port ? ['-p', String(port)] : [])];
 }
 
+/** Shared run() output accounting for both backends: 32 KiB stdout/stderr
+ * tails (don't keep unlimited npm output) and newline-split onLine callbacks
+ * sharing one line buffer, with an 8 KiB flush for newline-less floods. */
+export function sshOutputCapture(onLine) {
+  let out = '', err = '', lineBuffer = '';
+  const emit = (v) => {
+    lineBuffer += String(v);
+    let i;
+    while ((i = lineBuffer.indexOf('\n')) >= 0) {
+      const line = lineBuffer.slice(0, i); lineBuffer = lineBuffer.slice(i + 1);
+      if (line.trim()) onLine?.(line.trimEnd());
+    }
+    if (lineBuffer.length > 8192) { onLine?.(lineBuffer.slice(-8192)); lineBuffer = ''; }
+  };
+  return {
+    stdout: (d) => { out = (out + d).slice(-32_768); emit(d); },
+    stderr: (d) => { err = (err + d).slice(-32_768); emit(d); },
+    result: () => ({ out: out.trim(), err: err.trim() }),
+  };
+}
+
+/** run() adapter shared by both backends: resolves the trimmed stdout or
+ * rejects on failure. Use as an object member (`runStrict: sshRunStrict`) so
+ * `this.run` binds to the backend. */
+export async function sshRunStrict(context) {
+  const r = await this.run(context);
+  if (r.code !== 0) throw new Error(`ssh command failed (${r.code}): ${r.err || 'no stderr'}`);
+  return r.out;
+}
+
 /** Capture a local helper binary (ssh-keygen), not a remote command. */
 function captureLocal(command, args, options) {
   return withDeadline((signal) => new Promise((resolve, reject) => {
@@ -59,26 +89,16 @@ export const spawnSshBackend = {
   run({ prefix = '', home, host, port, command, stdin, onLine, timeoutMs = 60_000, signal }) {
     return withDeadline((bounded) => new Promise((resolve, reject) => {
       const c = spawn(`${prefix}/bin/ssh`, [...sshBaseOptions(home, port), '--', host, command], { env: process.env });
-      let out = '', err = '', done = false;
-      const tail = (v, d) => (v + d).slice(-32_768); // don't keep unlimited npm output
-      let lineBuffer = '';
-      const emit = (v) => {
-        lineBuffer += String(v);
-        let i;
-        while ((i = lineBuffer.indexOf('\n')) >= 0) {
-          const line = lineBuffer.slice(0, i); lineBuffer = lineBuffer.slice(i + 1);
-          if (line.trim()) onLine?.(line.trimEnd());
-        }
-        if (lineBuffer.length > 8192) { onLine?.(lineBuffer.slice(-8192)); lineBuffer = ''; }
-      };
-      c.stdout.on('data', (d) => { out = tail(out, d); emit(d); });
-      c.stderr.on('data', (d) => { err = tail(err, d); emit(d); });
+      const capture = sshOutputCapture(onLine);
+      let done = false;
+      c.stdout.on('data', capture.stdout);
+      c.stderr.on('data', capture.stderr);
       const abort = () => { c.kill('SIGKILL'); finish(bounded.reason); };
       const finish = (e, code) => {
         if (done) return;
         done = true;
         bounded.removeEventListener('abort', abort);
-        if (e) reject(e); else resolve({ code, out: out.trim(), err: err.trim() });
+        if (e) reject(e); else resolve({ code, ...capture.result() });
       };
       bounded.addEventListener('abort', abort, { once: true });
       c.on('error', finish);
@@ -90,11 +110,7 @@ export const spawnSshBackend = {
   },
 
   /** Like run(), but resolves the trimmed stdout or rejects on failure. */
-  async runStrict(context) {
-    const r = await this.run(context);
-    if (r.code !== 0) throw new Error(`ssh command failed (${r.code}): ${r.err || 'no stderr'}`);
-    return r.out;
-  },
+  runStrict: sshRunStrict,
 
   /** SHA256:… host-key fingerprint from the known_hosts file, or null. */
   async fingerprint({ prefix = '', home, host, port, timeoutMs, signal }) {

@@ -1,4 +1,18 @@
-import { API } from './constants.js';
+// One table drives both navigations: the terminal sheet lists every entry,
+// the bottom bar lists the main ones (`bar: false` keeps the Steuerung page
+// reachable via the sheet and spaces.html without crowding the bar).
+// `barLabel` shortens an entry where the full label does not fit; `also`
+// marks pages on which a tab stays highlighted (sessions → Chat,
+// spacectl → Spaces).
+const NAV = [
+  { key: 'chat',     href: '/',              icon: '💬', label: 'Chat', also: ['sessions'] },
+  { key: 'remote',   href: '/remote.html',   icon: '⌁',  label: 'Remote' },
+  { key: 'term',     href: '/terminal.html', icon: '>_', label: 'pi CLI (local)', barLabel: 'CLI' },
+  { key: 'clients',  href: '/clients.html',  icon: '⊟',  label: 'Clients' },
+  { key: 'spaces',   href: '/spaces.html',   icon: '▦',  label: 'Spaces', also: ['spacectl'] },
+  { key: 'spacectl', href: '/spacectl.html', icon: '⚙',  label: 'Spaces-Steuerung', bar: false },
+  { key: 'keys',     href: '/keys.html',     icon: '⚿',  label: 'Accounts' },
+];
 
 // Shared header setup and bottom navigation for every page.
 // renderMenu() is called once per page and returns the session token.
@@ -46,16 +60,7 @@ export function renderMenu() {
     overlay.className = 'hidden';
     const sheet = document.createElement('div');
     sheet.id = 'nav-sheet';
-    const tabs = [
-      { href: '/',             icon: '💬', label: 'Chat' },
-      { href: '/remote.html',  icon: '⌁',  label: 'Remote' },
-      { href: '/terminal.html',icon: '>_', label: 'pi CLI (local)' },
-      { href: '/clients.html', icon: '⊟',  label: 'Clients' },
-      { href: '/spaces.html', icon: '▦', label: 'Spaces' },
-      { href: '/steuerung.html', icon: '⚙', label: 'Spaces-Steuerung' },
-      { href: '/keys.html',    icon: '⚿',  label: 'Accounts' },
-    ];
-    for (const t of tabs.filter((t) => worksOnIos(t.href))) {
+    for (const t of NAV.filter((t) => worksOnIos(t.href))) {
       const a = document.createElement('a');
       a.href = q(t.href);
       a.innerHTML = `<span class="nav-icon">${t.icon}</span>${t.label}`;
@@ -92,27 +97,11 @@ export function renderMenu() {
   // ── All other pages: bottom navigation bar ────────────────────────────────
   const nav = document.createElement('nav');
   nav.id = 'bottom-nav';
-  const PAGES = {
-    chat:     ['chat', 'sessions'],
-    remote:   ['remote'],
-    term:     ['term'],
-    clients:  ['clients'],
-    keys:     ['keys'],
-    spaces:   ['spaces', 'spacectl'],
-  };
-  const tabs = [
-    { key: 'chat',    href: '/',             icon: '💬', label: 'Chat' },
-    { key: 'remote',  href: '/remote.html',  icon: '⌁',  label: 'Remote' },
-    { key: 'term',    href: '/terminal.html',icon: '>_', label: 'CLI' },
-    { key: 'clients', href: '/clients.html', icon: '⊟',  label: 'Clients' },
-    { key: 'spaces', href: '/spaces.html', icon: '▦', label: 'Spaces' },
-    { key: 'keys',    href: '/keys.html',    icon: '⚿',  label: 'Keys' },
-  ];
-  for (const tab of tabs.filter((tab) => worksOnIos(tab.href))) {
+  for (const t of NAV.filter((t) => t.bar !== false && worksOnIos(t.href))) {
     const a = document.createElement('a');
-    a.href = q(tab.href);
-    if ((PAGES[tab.key] ?? []).includes(page)) a.className = 'active';
-    a.innerHTML = `<span class="nav-icon">${tab.icon}</span><span class="nav-label">${tab.label}</span>`;
+    a.href = q(t.href);
+    if (t.key === page || (t.also ?? []).includes(page)) a.className = 'active';
+    a.innerHTML = `<span class="nav-icon">${t.icon}</span><span class="nav-label">${t.barLabel || t.label}</span>`;
     nav.appendChild(a);
   }
   document.body.appendChild(nav);

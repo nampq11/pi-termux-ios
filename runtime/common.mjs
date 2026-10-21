@@ -1,88 +1,17 @@
 // common.mjs — shared pieces of server.mjs (phone bridge) and pi-serverd.mjs
 // (remote session daemon): credential store, harness setup, durable session
-// registry, sequenced event buffers, atomic files and the single-owner lock.
-import {
-  closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync,
-  unlinkSync, writeFileSync, writeSync,
-} from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
+// registry and request helpers. File primitives live in fileio.mjs.
+import { statSync } from 'node:fs';
 import { Type } from '@earendil-works/pi-ai';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import {
   AssistantEntry, configure, createRegistry, defineDoc, defineExtension, defineTool,
-  Harness, watchEvents,
+  Harness,
 } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// --- files ---------------------------------------------------------------------
-
-/** Write via temp file + rename so a crash never leaves a truncated file. */
-export function writeFileAtomic(file, data, mode = 0o600) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-  writeFileSync(tmp, data, { mode });
-  renameSync(tmp, file);
-}
-
-export function readJson(file, fallback) {
-  try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return fallback; }
-}
-
-/** Cross-process advisory lock (O_EXCL lock file, stale after `staleMs`). */
-export async function withFileLock(file, fn, { staleMs = 10_000, timeoutMs = 15_000 } = {}) {
-  const lock = `${file}.lock`;
-  const deadline = Date.now() + timeoutMs;
-  mkdirSync(path.dirname(file), { recursive: true });
-  for (;;) {
-    try {
-      const fd = openSync(lock, 'wx', 0o600);
-      writeSync(fd, String(process.pid));
-      closeSync(fd);
-      break;
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      try { if (Date.now() - statSync(lock).mtimeMs > staleMs) unlinkSync(lock); } catch {}
-      if (Date.now() > deadline) throw new Error(`lock timeout: ${lock}`);
-      await sleep(50);
-    }
-  }
-  try { return await fn(); } finally { try { unlinkSync(lock); } catch {} }
-}
-
-// --- single storage owner --------------------------------------------------------
-
-function pidAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-}
-function pidRuns(pid, script) {
-  try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(script); } catch { return false; }
-}
-
-/**
- * pi-durable has no cross-process locking: one process may own a storage.
- * Take `lockFile`; a still running predecessor of the same script (for example
- * an orphan left by a killed app process) is asked to stop, then killed.
- */
-export async function acquireOwnerLock(lockFile, script) {
-  mkdirSync(path.dirname(lockFile), { recursive: true });
-  const old = Number(readJson(lockFile, {})?.pid ?? readFileSafe(lockFile));
-  if (old && old !== process.pid && pidAlive(old) && pidRuns(old, script)) {
-    console.error(`owner lock: stopping previous ${script} pid ${old}`);
-    try { process.kill(old, 'SIGTERM'); } catch {}
-    for (let i = 0; i < 100 && pidAlive(old); i++) await sleep(100);
-    if (pidAlive(old)) { try { process.kill(old, 'SIGKILL'); } catch {} await sleep(200); }
-  }
-  writeFileAtomic(lockFile, JSON.stringify({ pid: process.pid, started: new Date().toISOString() }));
-  return () => {
-    try { if (readJson(lockFile, {})?.pid === process.pid) unlinkSync(lockFile); } catch {}
-  };
-}
-function readFileSafe(f) { try { return readFileSync(f, 'utf8').trim(); } catch { return ''; } }
+import { readJson, withFileLock, writeFileAtomic } from './fileio.mjs';
 
 // --- credentials: ~/.pi/agent/auth.json (pi CLI format) -------------------------
 
@@ -236,9 +165,6 @@ export const SessionRegistry = defineDoc({
   initial: () => ({ sessions: {}, activeId: null }),
 });
 
-// pi-spaces shared space; refreshed automatically by pi-spaces bundle and the Android pre-build task.
-export { spaces as Spaces, startService as startSpaceService } from './pi-spaces.mjs';
-
 export async function openHarness({ dbPath, models, env, extensions = [] }, ctx) {
   const registry = createRegistry();
   registry.install(CodingTools);
@@ -294,88 +220,6 @@ export function sessionStore(harness, ctx) {
         }
       });
       return entries.length;
-    },
-  };
-}
-
-// --- sequenced event buffer --------------------------------------------------------
-// One watchEvents stream per conversation feeds a ring of numbered events. Each
-// client polls with the last sequence number it has seen, so several clients can
-// read the same events and a lost response is simply fetched again. A client that
-// fell behind the ring gets `reset: true` and reloads the transcript.
-
-export function createEventHub(harness, ctx, { ringSize = 2000, idleMs = 10 * 60_000 } = {}) {
-  const hubs = new Map(); // conversationId -> hub
-
-  async function hubFor(conversationId) {
-    const key = String(conversationId);
-    let hub = hubs.get(key);
-    if (hub) { hub.lastUse = Date.now(); return hub; }
-    hub = { epoch: crypto.randomUUID(), events: [], firstSeq: 1, nextSeq: 1, waiters: new Set(), lastUse: Date.now(), stream: null };
-    hubs.set(key, hub);
-    try {
-      hub.stream = await watchEvents(harness, Number(conversationId), ctx);
-    } catch (e) { hubs.delete(key); throw e; }
-    hub.stream.start(async (events) => {
-      for (const ev of events) {
-        hub.events.push({ seq: hub.nextSeq++, ev });
-        if (hub.events.length > ringSize) { hub.events.shift(); hub.firstSeq = hub.events[0].seq; }
-      }
-      for (const w of hub.waiters) w();
-      hub.waiters.clear();
-    });
-    return hub;
-  }
-
-  // `epoch` identifies one buffer incarnation: after a daemon restart or an
-  // idle sweep the numbering starts over and the client must reload.
-  async function poll(conversationId, after, { epoch, waitMs = 25_000, signal } = {}) {
-    const hub = await hubFor(conversationId);
-    const head = () => hub.nextSeq - 1;
-    const valid = Number.isFinite(after) && after >= 0;
-    if ((epoch && epoch !== hub.epoch) || (valid && after > head())) {
-      return { epoch: hub.epoch, cursor: head(), reset: true, events: [] };
-    }
-    const since = valid ? after : head();
-    const deadline = Date.now() + waitMs;
-    while (head() <= since && Date.now() < deadline && !signal?.aborted) {
-      await new Promise((resolve) => {
-        hub.waiters.add(resolve);
-        setTimeout(resolve, Math.min(1000, Math.max(0, deadline - Date.now())));
-      });
-    }
-    hub.lastUse = Date.now();
-    const reset = since + 1 < hub.firstSeq;
-    const events = reset ? [] : hub.events.filter((e) => e.seq > since);
-    return {
-      epoch: hub.epoch,
-      cursor: head(),
-      reset,
-      // pi-durable itself sends a fresh `snapshot` event when its queue overflows.
-      events: events.map((e) => ({ ...e.ev, seq: e.seq })),
-    };
-  }
-
-  const sweep = setInterval(async () => {
-    for (const [key, hub] of hubs) {
-      if (Date.now() - hub.lastUse > idleMs && hub.waiters.size === 0) {
-        hubs.delete(key);
-        try { await hub.stream?.stop(); } catch {}
-      }
-    }
-  }, 60_000);
-  sweep.unref();
-
-  return {
-    poll,
-    async position(conversationId) {
-      const hub = await hubFor(conversationId);
-      return { epoch: hub.epoch, cursor: hub.nextSeq - 1 };
-    },
-    async close() {
-      clearInterval(sweep);
-      for (const hub of hubs.values()) { try { await hub.stream?.stop(); } catch {} }
-      hubs.clear();
     },
   };
 }

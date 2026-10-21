@@ -1,7 +1,9 @@
 // Runs, workers and operations through admin commands (docs/betrieb-und-mobile-steuerung.md §7.2 in pi-spaces).
 // Every action keeps its command ID; polling runs only while the page is visible; data is rendered as text only.
+import { initApi, postJson } from './api.js';
 import { renderMenu } from './menu.js';
-const token = renderMenu(), message = document.getElementById('ctl-message');
+initApi(renderMenu());
+const message = document.getElementById('ctl-message');
 const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const FINAL = ['completed', 'failed', 'duplicate'];
@@ -10,8 +12,8 @@ const FINAL = ['completed', 'failed', 'duplicate'];
 let queue = Promise.resolve();
 function api(method, body = {}) { const next = queue.then(() => request(method, body)); queue = next.catch(() => {}); return next; }
 async function request(method, body) {
-  const response = await fetch('/api/spaces/' + method, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-token': token }, body: JSON.stringify(body) });
-  const reply = await response.json(); if (!response.ok || reply.error) throw new Error(reply.error || 'HTTP ' + response.status); return reply;
+  const reply = await postJson('/api/spaces/' + method, body);
+  if (reply.error) throw new Error(reply.error); return reply;
 }
 /** Sends one admin command (or resends a known one) and waits for its result while the page is visible. */
 async function command(kind, args = {}, commandId) {

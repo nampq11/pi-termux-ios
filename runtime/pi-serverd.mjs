@@ -15,14 +15,17 @@ import { fileURLToPath } from 'node:url';
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node';
+import { watchEvents } from '@earendil-works/pi-durable';
 import { createUnixListener } from '@earendil-works/pi-server/unix';
 import { Server, SessionNotFoundError } from '@earendil-works/pi-server';
 import { createTcpListener } from './serverd-tcp.mjs';
-import { SpaceService, StaticIdentity, withSpaceService, startConfiguredFederation } from './pi-spaces.mjs';
+import { SpaceService, StaticIdentity, withSpaceService, startConfiguredFederation, spaces as Spaces, startService as startSpaceService } from './pi-spaces.mjs';
+import { acquireOwnerLock, writeFileAtomic } from './fileio.mjs';
+import { deleteSession, importLegacySessions, renameSession, sessionName } from './session-ops.mjs';
 import {
-  acquireOwnerLock, createCredentialStore, createEventHub, createModelCatalog,
-  ensureModel, isBusy, openHarness, pickModel, readJson, requestIdOf, sessionStore, Subagent,
-  whenBusyOf, writeFileAtomic, Spaces, startSpaceService,
+  createCredentialStore, createModelCatalog,
+  ensureModel, isBusy, openHarness, pickModel, requestIdOf, sessionStore, Subagent,
+  whenBusyOf,
 } from './common.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -68,19 +71,96 @@ const sessions = sessionStore(harness, ctx);
 
 // one-time import of the old JSON manifest
 {
-  const legacy = readJson(LEGACY_MANIFEST, null)?.sessions;
-  if (legacy && Object.keys(legacy).length && !(await sessions.list()).length) {
-    const n = await sessions.migrate(legacy);
-    writeFileAtomic(`${LEGACY_MANIFEST}.migrated`, JSON.stringify({ sessions: legacy }, null, 2));
-    try { unlinkSync(LEGACY_MANIFEST); } catch {}
-    console.log(`migrated ${n} sessions from ${LEGACY_MANIFEST}`);
-  }
+  const migrated = await importLegacySessions(sessions, LEGACY_MANIFEST);
+  if (migrated) console.log(`migrated ${migrated} sessions from ${LEGACY_MANIFEST}`);
 }
 const federation = process.env.PI_SERVERD_FEDERATION_CONFIG
   ? await startConfiguredFederation(harness, ctx, process.env.PI_SERVERD_FEDERATION_CONFIG) : null;
 if (existsSync(`${STATE_DIR}/restart.lock`)) throw new Error("restart lock was installed during boot");
 harness.resume();
 const stopSpaces = federation ? () => federation.close() : await startSpaceService(harness, ctx); // reaper + event delivery for the shared space
+
+// --- sequenced event buffer --------------------------------------------------------
+// One watchEvents stream per conversation feeds a ring of numbered events. Each
+// client polls with the last sequence number it has seen, so several clients can
+// read the same events and a lost response is simply fetched again. A client that
+// fell behind the ring gets `reset: true` and reloads the transcript.
+
+function createEventHub(harness, ctx, { ringSize = 2000, idleMs = 10 * 60_000 } = {}) {
+  const hubs = new Map(); // conversationId -> hub
+
+  async function hubFor(conversationId) {
+    const key = String(conversationId);
+    let hub = hubs.get(key);
+    if (hub) { hub.lastUse = Date.now(); return hub; }
+    hub = { epoch: randomUUID(), events: [], firstSeq: 1, nextSeq: 1, waiters: new Set(), lastUse: Date.now(), stream: null };
+    hubs.set(key, hub);
+    try {
+      hub.stream = await watchEvents(harness, Number(conversationId), ctx);
+    } catch (e) { hubs.delete(key); throw e; }
+    hub.stream.start(async (events) => {
+      for (const ev of events) {
+        hub.events.push({ seq: hub.nextSeq++, ev });
+        if (hub.events.length > ringSize) { hub.events.shift(); hub.firstSeq = hub.events[0].seq; }
+      }
+      for (const w of hub.waiters) w();
+      hub.waiters.clear();
+    });
+    return hub;
+  }
+
+  // `epoch` identifies one buffer incarnation: after a daemon restart or an
+  // idle sweep the numbering starts over and the client must reload.
+  async function poll(conversationId, after, { epoch, waitMs = 25_000, signal } = {}) {
+    const hub = await hubFor(conversationId);
+    const head = () => hub.nextSeq - 1;
+    const valid = Number.isFinite(after) && after >= 0;
+    if ((epoch && epoch !== hub.epoch) || (valid && after > head())) {
+      return { epoch: hub.epoch, cursor: head(), reset: true, events: [] };
+    }
+    const since = valid ? after : head();
+    const deadline = Date.now() + waitMs;
+    while (head() <= since && Date.now() < deadline && !signal?.aborted) {
+      await new Promise((resolve) => {
+        hub.waiters.add(resolve);
+        setTimeout(resolve, Math.min(1000, Math.max(0, deadline - Date.now())));
+      });
+    }
+    hub.lastUse = Date.now();
+    const reset = since + 1 < hub.firstSeq;
+    const events = reset ? [] : hub.events.filter((e) => e.seq > since);
+    return {
+      epoch: hub.epoch,
+      cursor: head(),
+      reset,
+      // pi-durable itself sends a fresh `snapshot` event when its queue overflows.
+      events: events.map((e) => ({ ...e.ev, seq: e.seq })),
+    };
+  }
+
+  const sweep = setInterval(async () => {
+    for (const [key, hub] of hubs) {
+      if (Date.now() - hub.lastUse > idleMs && hub.waiters.size === 0) {
+        hubs.delete(key);
+        try { await hub.stream?.stop(); } catch {}
+      }
+    }
+  }, 60_000);
+  sweep.unref();
+
+  return {
+    poll,
+    async position(conversationId) {
+      const hub = await hubFor(conversationId);
+      return { epoch: hub.epoch, cursor: hub.nextSeq - 1 };
+    },
+    async close() {
+      clearInterval(sweep);
+      for (const hub of hubs.values()) { try { await hub.stream?.stop(); } catch {} }
+      hubs.clear();
+    },
+  };
+}
 
 const events = createEventHub(harness, ctx);
 
@@ -198,7 +278,7 @@ const host = {
             case 'create': {
               const opts = call.args[0] ?? {};
               const conv = await sessions.create(
-                { name: typeof opts.name === 'string' ? opts.name.slice(0, 100) : undefined, cwd: WORKDIR },
+                { name: sessionName(opts.name), cwd: WORKDIR },
                 { agent: { model: await pickModel(models) } },
               );
               return { id: String(conv.id) };
@@ -206,11 +286,8 @@ const host = {
             case 'delete': {
               const id = String(call.args[0]);
               return withSessionMutation(id, async () => {
-                const conv = await conversationOf(id);
                 // No prompt/compact can start between abort and removal.
-                await conv.abort(c);
-                // Transcript stays in SQLite; every attached handler now rejects.
-                await sessions.remove(id);
+                await deleteSession(harness, sessions, id, c);
                 return { ok: true };
               });
             }
@@ -221,10 +298,7 @@ const host = {
               return { ok: true };
             }
             case 'rename': {
-              const id = String(call.args[0]);
-              const name = typeof call.args[1] === 'string' ? call.args[1].slice(0, 100) : undefined;
-              if (!(await sessions.get(id))) throw new Error(`unknown session: ${id}`);
-              await sessions.update(id, { name: name || undefined });
+              await renameSession(sessions, String(call.args[0]), call.args[1]);
               return { ok: true };
             }
             default:

@@ -199,27 +199,5 @@ export function usageText(usage) {
   return `${tokens.toLocaleString()} tok${cost ? ` · $${cost.toFixed(3)}` : ''}`;
 }
 
-/** fetch JSON; network failures are retried with the same body (idempotent requestId). */
-export async function postJson(url, token, body, { retries = 0 } = {}) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-token': token },
-        body: JSON.stringify(body ?? {}),
-      });
-      const j = await r.json().catch(() => ({ error: `http ${r.status}` }));
-      if ((r.status === 503 && j.reconnecting) && attempt < retries) {
-        await new Promise((res) => setTimeout(res, 1500));
-        continue;
-      }
-      return j;
-    } catch (e) {
-      if (attempt >= retries) return { error: String(e?.message || e) };
-      await new Promise((res) => setTimeout(res, 800 * (attempt + 1)));
-    }
-  }
-}
-
 export const newRequestId = () => (crypto.randomUUID ? crypto.randomUUID()
   : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);

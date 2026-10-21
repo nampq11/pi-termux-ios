@@ -7,7 +7,8 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "node --test test-remote-provision.mjs test-remote-state.mjs test-remote-regressions.mjs"
+    "test": "node --test",
+    "test:tcp": "PI_SERVERD_TCP_TESTS=1 node --test test-serverd-tcp.mjs"
   },
   "dependencies": {
     "@earendil-works/chord": "^1.0.3",

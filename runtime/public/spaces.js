@@ -1,8 +1,10 @@
+import { initApi, postJson } from './api.js';
 import { renderMenu } from './menu.js';
-const token = renderMenu(), message = document.getElementById('space-message'), result = document.getElementById('space-result');
+initApi(renderMenu());
+const message = document.getElementById('space-message'), result = document.getElementById('space-result');
 async function call(action, body = {}) {
   const buttons = [...document.querySelectorAll('button')]; buttons.forEach(b => b.disabled = true); message.textContent = 'Läuft …';
-  try { const response = await fetch('/api/spaces/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-token': token }, body: JSON.stringify(body) }); const reply = await response.json(); if (!response.ok || reply.error) throw new Error(reply.error || 'HTTP ' + response.status); result.textContent = JSON.stringify(reply, null, 2); message.textContent = 'Ergebnis empfangen'; return reply; }
+  try { const reply = await postJson('/api/spaces/' + action, body); if (reply.error) throw new Error(reply.error); result.textContent = JSON.stringify(reply, null, 2); message.textContent = 'Ergebnis empfangen'; return reply; }
   catch (error) { message.textContent = error.message; }
   finally { buttons.forEach(b => b.disabled = false); }
 }

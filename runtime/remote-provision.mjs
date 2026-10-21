@@ -7,11 +7,12 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { attachRemote, parseSshTarget, withDeadline } from './remote-client.mjs';
-import { sshBackend } from './ssh-transport.mjs';
+import { attachRemote, parseSshTarget } from './remote-client.mjs';
+import { sshBackend, withDeadline } from './ssh-transport.mjs';
+import { semverAtLeast } from './semver.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-export const REMOTE_FILES = ['pi-serverd.mjs', 'common.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json'];
+export const REMOTE_FILES = ['pi-serverd.mjs', 'serverd-tcp.mjs', 'common.mjs', 'fileio.mjs', 'session-ops.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json'];
 // Generated CLI examples are optional, not needed by the daemon. Hash and
 // upload the same manifest so a fresh checkout remains deployable.
 export function remoteFiles(root = ROOT) {
@@ -43,10 +44,7 @@ export function runtimeHash(root = ROOT, files = remoteFiles(root)) {
   return h.digest('hex').slice(0, 16);
 }
 export function nodeSupported(version) {
-  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version || '');
-  if (!m) return false;
-  const [major, minor, patch] = m.slice(1).map(Number);
-  return major > 22 || (major === 22 && (minor > 19 || (minor === 19 && patch >= 0)));
+  return semverAtLeast(version, '22.19.0');
 }
 function makeCtx(ssh, prefix) {
   const { host, port } = parseSshTarget(ssh);

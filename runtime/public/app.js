@@ -1,8 +1,10 @@
+import { authUrl, getJson, initApi, postJson } from './api.js';
+import { wireComposer } from './composer.js';
 import { API } from './constants.js';
 import { renderMenu } from './menu.js';
-import { newRequestId, postJson, Transcript, usageText } from './transcript.js';
+import { Transcript, usageText } from './transcript.js';
 
-const token = renderMenu();
+initApi(renderMenu());
 
 const chat = document.getElementById('chat');
 const input = document.getElementById('input');
@@ -37,13 +39,13 @@ const transcript = new Transcript(chat, {
 // --- events: every (re)connect gets a fresh snapshot of the current state ----
 
 function connect() {
-  const es = new EventSource(`${API.events}?token=${encodeURIComponent(token)}`);
+  const es = new EventSource(authUrl(API.events));
   es.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
     if (ev.type === 'bridge_snapshot') {
       sessionNameEl.textContent = ev.sessionName || 'Main';
-      if (sessionLink) sessionLink.href = `sessions.html?token=${encodeURIComponent(token)}`;
+      if (sessionLink) sessionLink.href = authUrl('sessions.html');
       transcript.renderSnapshot(ev.snapshot);
     } else if (ev.type === 'bridge_error') {
       transcript.sys(`error: ${ev.error}`);
@@ -56,19 +58,14 @@ function connect() {
 
 // --- composer: requestId makes a retried prompt exactly-once ------------------
 
-document.getElementById('composer').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = '';
-  const pending = transcript.addPendingUser(text);
-  const body = { message: text, requestId: newRequestId() };
-  if (busy && steerBox.checked) body.whenBusy = 'steer';
-  const r = await postJson(API.prompt, token, body, { retries: 3 });
-  if (r.error) transcript.failPending(pending, r.error);
-});
-input.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) document.getElementById('composer').requestSubmit();
+wireComposer({
+  form: document.getElementById('composer'),
+  input,
+  transcript,
+  steerBox,
+  isBusy: () => busy,
+  endpoint: API.prompt,
+  retries: 3,
 });
 
 // --- model picker ------------------------------------------------------------
@@ -86,39 +83,36 @@ function syncModelSelect() {
 }
 
 async function refreshModels() {
-  try {
-    const r = await fetch(`${API.models}?token=${encodeURIComponent(token)}`);
-    const j = await r.json();
-    modelSelect.innerHTML = '<option value="">no model</option>';
-    for (const m of j.models ?? []) {
-      const o = document.createElement('option');
-      o.value = `${m.provider}|${m.modelId}`;
-      o.textContent = `${m.provider}/${m.modelId}`;
-      modelSelect.appendChild(o);
-    }
-    syncModelSelect();
-  } catch {}
+  const j = await getJson(API.models);
+  if (j.error) return; // keep the last known list; the SSE snapshot re-syncs the selection
+  modelSelect.innerHTML = '<option value="">no model</option>';
+  for (const m of j.models ?? []) {
+    const o = document.createElement('option');
+    o.value = `${m.provider}|${m.modelId}`;
+    o.textContent = `${m.provider}/${m.modelId}`;
+    modelSelect.appendChild(o);
+  }
+  syncModelSelect();
 }
 
 modelSelect.addEventListener('change', async () => {
   const [provider, modelId] = modelSelect.value.split('|');
   if (!modelId) return;
-  const r = await postJson(API.model, token, { provider, modelId });
+  const r = await postJson(API.model, { provider, modelId });
   if (!r.ok) transcript.sys(`error: ${r.error}`);
 });
 
 // ── Header action buttons ────────────────────────────────────────────────
-const post1 = (url) => fetch(url, { method: 'POST', headers: { 'x-token': token } });
-if (btnAbort)   btnAbort.addEventListener('click',   () => post1(API.abort));
+if (btnAbort)   btnAbort.addEventListener('click',   () => postJson(API.abort));
 if (btnCompact) btnCompact.addEventListener('click', async () => {
-  const r = await postJson(API.compact, token, {});
+  const r = await postJson(API.compact, {});
   if (!r.ok && r.error) transcript.sys(`error: ${r.error}`);
 });
 if (btnNew) btnNew.addEventListener('click', async () => {
   const name = prompt('Session name (optional):') ?? null;
   if (name === null) return;
-  const r = await postJson(API.sessionNew, token, { name });
-  if (r.ok) location.href = `/?token=${encodeURIComponent(token)}`;
+  const r = await postJson(API.sessionNew, { name });
+  if (r.ok) location.href = authUrl('/');
   else transcript.sys(`error: ${r.error}`);
 });
 

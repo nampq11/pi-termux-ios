@@ -1,5 +1,5 @@
-// test-remote-client.mjs — exercises pi-serverd end-to-end over the unix socket.
-// Usage: node test-remote-client.mjs [socketPath] [serverId]
+// manual-remote-client.mjs — manual smoke script: exercises pi-serverd end-to-end over the unix socket.
+// Usage: node manual-remote-client.mjs [socketPath] [serverId]
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { Client } from '@earendil-works/pi-client';

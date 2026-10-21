@@ -642,4 +642,4 @@ recovery integration are documented in the sibling pi-spaces
 
 Mobile lifecycle checks: `node --test test/spaces-mobile.test.mjs`.
 
-The **Spaces-Steuerung** page (`runtime/public/steuerung.html`) sends admin commands (runs, workers) through the paired control connection. Each command ID is stored in the private profile before it is sent and is reused after a timeout, double tap or restart; results are polled only while the page is visible.
+The **Spaces-Steuerung** page (`runtime/public/spacectl.html`) sends admin commands (runs, workers) through the paired control connection. Each command ID is stored in the private profile before it is sent and is reused after a timeout, double tap or restart; results are polled only while the page is visible.

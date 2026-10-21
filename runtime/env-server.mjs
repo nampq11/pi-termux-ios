@@ -11,8 +11,8 @@
 //   /exec { command, cwd?, env?, timeout?, stream? } -> { exitCode, output }
 //         stream: true -> NDJSON lines {output} … {exitCode, timedOut}
 //   /fs   { op, path?, ... }                         -> per-op payload
-// fs ops: read write append truncate rename info list exists mkdir remove
-//         canonical tempdir tempfile
+// fs ops: read readlines write append truncate rename info list exists mkdir
+//         remove canonical tempdir tempfile
 // A client that disconnects (abort) kills the command's whole process group.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -96,10 +96,42 @@ function execCmd(body, res) {
   });
 }
 
-function fsOp(b) {
+async function fsOp(b) { // async: readlines streams the file
   const p = b.path;
   switch (b.op) {
     case 'read': return { contentB64: fs.readFileSync(p).toString('base64') };
+    case 'readlines': {
+      // line-windowed read for remote text readers: scan the file here, hand
+      // back only [startLine, startLine+lineCount) so a big file never travels
+      // whole over the wire. `final` marks a window that reached end of file
+      // (false only means "there may be more"). Windows are capped in lines
+      // and bytes; a window always holds at least one line when one exists.
+      const startLine = Math.max(0, Math.trunc(Number(b.startLine) || 0));
+      const lineCount = Math.min(Math.max(0, Math.trunc(Number(b.lineCount) || 0)), 10_000);
+      const lines = [];
+      let bytes = 0;
+      let index = 0;
+      let rest = '';
+      let final = false;
+      const full = () => lineCount > 0 && (lines.length >= lineCount || bytes > 1_048_576);
+      for await (const chunk of fs.createReadStream(p, { encoding: 'utf8' })) {
+        rest += chunk;
+        let nl;
+        while ((nl = rest.indexOf('\n')) !== -1) {
+          const text = rest.slice(0, nl);
+          rest = rest.slice(nl + 1);
+          if (index >= startLine && !full()) { lines.push({ text, terminated: true }); bytes += Buffer.byteLength(text) + 1; }
+          index++;
+          if (full()) break;
+        }
+        if (full()) break;
+      }
+      if (!full()) {
+        final = true;
+        if (rest !== '' && index >= startLine) lines.push({ text: rest, terminated: false });
+      }
+      return { lines, final };
+    }
     case 'write': fs.writeFileSync(p, Buffer.from(b.contentB64, 'base64')); return { ok: true };
     case 'append': fs.appendFileSync(p, Buffer.from(b.contentB64, 'base64')); return { ok: true };
     case 'truncate': fs.truncateSync(p, b.size); return { ok: true };
@@ -140,7 +172,7 @@ const server = http.createServer(async (req, res) => {
   try { body = await readBody(req); } catch (e) { return json(res, e.status || 400, { error: { code: 'invalid', message: e.message } }); }
   try {
     if (req.url === '/exec') return await execCmd(body, res);
-    if (req.url === '/fs') return json(res, 200, fsOp(body));
+    if (req.url === '/fs') return json(res, 200, await fsOp(body));
     return json(res, 404, { error: 'not found' });
   } catch (e) {
     const code = e.code === 'ENOENT' ? 'not_found' : e.code === 'EACCES' || e.code === 'EPERM' ? 'permission_denied' : 'unknown';
@@ -150,4 +182,4 @@ const server = http.createServer(async (req, res) => {
 });
 server.requestTimeout = 0; // long-running commands are bounded by their own timeout
 
-server.listen(PORT, HOST, () => console.log(`env-server on ${HOST}:${PORT}`));
+server.listen(PORT, HOST, () => console.log(`env-server on ${HOST}:${server.address().port}`));
