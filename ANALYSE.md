@@ -1,5 +1,10 @@
 # pi-termux-mobile — Architektur- und Plattformanalyse
 
+> **Status 2026-10-21:** Dieses Repository ist der iOS-only-Fork
+> (`pi-termux-ios`). Die Android-App (Abschnitt 4/Weg B, `android/`) wurde
+> entfernt; der iOS-Port (Abschnitt 9) ist die aktive Plattform. Dieses
+> Dokument bleibt als Recherche- und Entscheidungsgeschichte erhalten.
+
 Ziel: `@earendil-works/pi-coding-agent` auf Android als eigene, kleine App mit
 eingebetteter Termux-Runtime und WebView-UI betreiben.
 

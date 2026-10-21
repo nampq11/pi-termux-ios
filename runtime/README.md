@@ -1,4 +1,4 @@
-# runtime/ — the pi-termux-mobile runtime
+# runtime/ — the pi-termux-ios runtime
 
 No build step: these files ship as-is, twice (see "Payloads" below). Node >= 22.19,
 ESM, German UI text is deliberate. `npm test` runs every `test-*.mjs` suite —
@@ -8,8 +8,9 @@ internals.
 ## Entry points
 
 - `server.mjs` — the phone bridge (HTTP + SSE + WebSocket/PTY) behind the app
-  WebView. Spawned by Android's `PiService.java`; on iOS it runs in-process in
-  `NodeEngine.swift` with `PI_PLATFORM=ios` (no child processes, no PTY).
+  UI. On iOS it runs in-process in `NodeEngine.swift` with `PI_PLATFORM=ios`
+  (no child processes, no PTY); during development it runs directly under Node
+  on Linux and serves the web UI.
 - `pi-serverd.mjs` — the daemon on remote hosts (Unix socket).
   `serverd-tcp.mjs` is its opt-in loopback TCP listener for the pure-JS SSH
   tunnel on iOS.

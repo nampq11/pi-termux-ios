@@ -1,8 +1,8 @@
 // The one place that knows how to reach an SSH host. Callers pass structured
 // options; a backend renders them. Two backends:
-//   - spawn: the OpenSSH binary (Android/Termux, Linux dev). Argv is identical
-//     to the pre-transport code — the provisioning tests stub bin/ssh and match
-//     the remote command as the last argv element.
+//   - spawn: the OpenSSH binary (Linux dev). Argv is identical to the
+//     pre-transport code — the provisioning tests stub bin/ssh via the prefix
+//     and match the remote command as the last argv element.
 //   - js: a pure-JS ssh2 client (iOS denies exec; registered at startup).
 import { spawn } from 'node:child_process';
 

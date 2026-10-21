@@ -28,8 +28,8 @@ export function createSystemRoutes(deps) {
   function startPiUpdate() {
     if (piUpdate.running) return false;
     Object.assign(piUpdate, { running: true, done: false, ok: false, version: null, error: null, log: [] });
-    // Run npm via node to avoid Termux shebang incompatibility on Android.
-    // Try: node <npm-cli.js>, fallback to direct npm binary.
+    // Run npm via node when a prefix toolchain provides npm-cli.js (the test
+    // harness); otherwise use the npm binary from PATH.
     const nodeBin = process.execPath;
     const npmCli = prefix ? `${prefix}/lib/node_modules/npm/bin/npm-cli.js` : null;
     let spawnArgs;
