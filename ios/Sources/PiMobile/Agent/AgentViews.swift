@@ -91,8 +91,22 @@ public struct AgentView: View {
                     }
                     .accessibilityLabel("Open workspaces drawer")
                 }
+                // Static environment badge + conversation title. Switching
+                // environments lives in the ☰ drawer, conversation actions in
+                // the ⋯ menu — one home per concern, no duplicate tap targets.
                 ToolbarItem(placement: .principal) {
-                    titleButton(state)
+                    HStack(spacing: 6) {
+                        Text("📱 Local")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                        Text(state.current?.displayTitle ?? "Agent")
+                            .font(.headline)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: model.wide ? 360 : 220)
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
@@ -103,15 +117,6 @@ public struct AgentView: View {
                             .font(.system(size: 16, weight: .semibold))
                     }
                     .accessibilityLabel("New conversation")
-
-                    Button {
-                        haptic()
-                        model.showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 16, weight: .medium))
-                    }
-                    .accessibilityLabel("Settings & Tools")
 
                     menu(state)
                 }
@@ -153,57 +158,6 @@ public struct AgentView: View {
         )) {
             LoginFlowView().environment(model)
         }
-    }
-
-    /// The unified environment & conversation menu button.
-    private func titleButton(_ state: AgentState) -> some View {
-        Menu {
-            Section("Environment") {
-                Button {
-                    model.switchEnvironment(.local)
-                } label: {
-                    Label("On-Device (Local)", systemImage: model.currentEnvironment.isLocal ? "checkmark" : "")
-                }
-                ForEach(model.clients.hosts) { host in
-                    Button {
-                        model.switchEnvironment(.remote(target: host.target))
-                    } label: {
-                        Label(host.name, systemImage: "")
-                    }
-                }
-            }
-            Section("Active Conversation") {
-                Button {
-                    haptic()
-                    model.agentListShown = true
-                } label: {
-                    Label("All Conversations…", systemImage: "list.bullet")
-                }
-                if let current = state.current, current.title != nil {
-                    Button { renaming = current } label: { Label("Rename…", systemImage: "pencil") }
-                    Button { model.agentArchive(current.id, true) } label: { Label("Archive", systemImage: "archivebox") }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Text("📱 Local")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.12), in: Capsule())
-
-                Text(state.current?.displayTitle ?? "Agent")
-                    .font(.headline)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: model.wide ? 360 : 220)
-        }
-        .tint(.primary)
-        .accessibilityLabel("Workspaces & Conversations")
     }
 
     private func scrollKey(_ state: AgentState) -> String {
@@ -301,28 +255,6 @@ public struct AgentView: View {
 
     private func menu(_ state: AgentState) -> some View {
         Menu {
-            if !model.agentModels.isEmpty {
-                Menu {
-                    let groups = Dictionary(grouping: model.agentModels, by: \.providerName)
-                    ForEach(groups.keys.sorted(), id: \.self) { provider in
-                        Section(provider) {
-                            ForEach(groups[provider] ?? []) { option in
-                                Button {
-                                    model.agentSetModel(option)
-                                } label: {
-                                    if state.model?.provider == option.provider && state.model?.id == option.model {
-                                        Label(option.name, systemImage: "checkmark")
-                                    } else {
-                                        Text(option.name)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } label: {
-                    Label(state.model?.name ?? "Model", systemImage: "cpu")
-                }
-            }
             if let current = state.current, current.title != nil {
                 Button { renaming = current } label: { Label("Rename…", systemImage: "pencil") }
                 Button { model.agentArchive(current.id, true) } label: { Label("Archive", systemImage: "archivebox") }
@@ -341,9 +273,12 @@ public struct AgentView: View {
     /// Floating bottom composer capsule
     private func composer(_ state: AgentState) -> some View {
         VStack(spacing: 8) {
-            // Context header row: Model indicator + status
+            // Context header row: the model picker's single home (the ⋯ menu
+            // no longer duplicates it). Shown whenever models are configured;
+            // "Model" placeholder when none is selected so the entry point
+            // never disappears.
             HStack(spacing: 8) {
-                if let m = state.model, !m.name.isEmpty {
+                if !model.agentModels.isEmpty {
                     Menu {
                         let groups = Dictionary(grouping: model.agentModels, by: \.providerName)
                         ForEach(groups.keys.sorted(), id: \.self) { provider in
@@ -365,7 +300,7 @@ public struct AgentView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "cpu")
                                 .font(.caption2)
-                            Text(m.name)
+                            Text(state.model.flatMap { $0.name.isEmpty ? nil : $0.name } ?? "Model")
                                 .font(.caption2.weight(.medium))
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 8, weight: .bold))
