@@ -1,9 +1,9 @@
 import SwiftUI
 
-// The app's primary navigation, mirroring the web UI's bottom bar on iOS:
-// Chat, Remote, Clients, Spaces, Accounts. The local pi CLI terminal cannot
-// run here (child processes are denied), so terminal screens are SSH-only
-// and open from Clients. Feature tabs are added as their screens land.
+// The app's primary navigation on iOS:
+// Chat, Remote, Clients, Spaces, Accounts.
+// Features Apple-style tab iconography, haptic feedback, and the shared
+// key-install modal flow.
 
 struct MainTabView: View {
     @Environment(AppModel.self) private var model
@@ -16,20 +16,27 @@ struct MainTabView: View {
         @Bindable var model = model
         return TabView(selection: $selection) {
             AgentView()
-                .tabItem { Label("Chat", systemImage: "message.fill") }
+                .tabItem { Label("Chat", systemImage: "sparkles") }
                 .tag(Tab.chat)
+
             RemoteView()
-                .tabItem { Label("Remote", systemImage: "antenna.radiowaves.left.and.right") }
+                .tabItem { Label("Remote", systemImage: "server.rack") }
                 .tag(Tab.remote)
+
             ClientsView()
-                .tabItem { Label("Clients", systemImage: "rectangle.connected.to.line.below") }
+                .tabItem { Label("Clients", systemImage: "desktopcomputer") }
                 .tag(Tab.clients)
+
             NavigationStack { SpacesView() }
                 .tabItem { Label("Spaces", systemImage: "square.3.layers.3d.top.filled") }
                 .tag(Tab.spaces)
+
             NavigationStack { AccountsView() }
-                .tabItem { Label("Accounts", systemImage: "key") }
+                .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
                 .tag(Tab.accounts)
+        }
+        .onChange(of: selection) { _, _ in
+            haptic()
         }
         // The shared key-install flow, hosted once so Clients and the
         // terminal screen can both trigger it.
@@ -41,10 +48,10 @@ struct MainTabView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Install key") { model.keyInstall.confirm() }
+            Button("Install Key") { model.keyInstall.confirm() }
             Button("Cancel", role: .cancel) { model.keyInstall.cancel() }
         } message: {
-            Text("The key lets this device sign in to \(model.keyInstall.target ?? "") without a password.")
+            Text("The Ed25519 key lets this device sign in to \(model.keyInstall.target ?? "") without a password.")
         }
         .sheet(isPresented: Binding(
             get: { model.keyInstall.phase == .password },
@@ -52,7 +59,7 @@ struct MainTabView: View {
         )) {
             passwordSheet
         }
-        .alert("Key installation failed",
+        .alert("Key Installation Failed",
                isPresented: Binding(
                    get: { model.keyInstall.error != nil },
                    set: { if !$0 { model.keyInstall.error = nil } }
@@ -66,15 +73,19 @@ struct MainTabView: View {
     private var passwordSheet: some View {
         NavigationStack {
             Form {
-                SecureField("password", text: $password)
-                    .onSubmit { submitPassword() }
-                if model.keyInstall.passwordRejected {
-                    Text("wrong password — try again")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                Section {
+                    SecureField("SSH Account Password", text: $password)
+                        .onSubmit { submitPassword() }
+                    if model.keyInstall.passwordRejected {
+                        Text("Incorrect password — please try again.")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                } footer: {
+                    Text("Your password is used once to append the device key to ~/.ssh/authorized_keys and is never stored.")
                 }
             }
-            .navigationTitle("Password for \(model.keyInstall.target ?? "")")
+            .navigationTitle("Authenticate for \(model.keyInstall.target ?? "")")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -84,7 +95,8 @@ struct MainTabView: View {
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Install key") { submitPassword() }
+                    Button("Install Key") { submitPassword() }
+                        .font(.body.weight(.semibold))
                         .disabled(password.isEmpty)
                 }
             }
@@ -98,6 +110,7 @@ struct MainTabView: View {
     private func submitPassword() {
         let value = password
         password = ""
+        haptic()
         Task { await model.keyInstall.submit(password: value) }
     }
 }
