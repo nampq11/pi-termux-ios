@@ -12,7 +12,7 @@ import net from 'node:net';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import SSH2 from 'ssh2';
-import { withDeadline } from './ssh-transport.mjs';
+import { sshOutputCapture, sshRunStrict, withDeadline } from './ssh-transport.mjs';
 
 const { Client } = SSH2;
 
@@ -110,24 +110,14 @@ export const jsSshBackend = {
   run({ home, host, port, command, stdin, onLine, timeoutMs = 60_000, signal }) {
     return withDeadline((bounded) => new Promise((resolve, reject) => {
       let conn;
-      let out = '', err = '', done = false, exitCode = null;
-      const tail = (v, d) => (v + d).slice(-32_768); // don't keep unlimited npm output
-      let lineBuffer = '';
-      const emit = (v) => {
-        lineBuffer += String(v);
-        let i;
-        while ((i = lineBuffer.indexOf('\n')) >= 0) {
-          const line = lineBuffer.slice(0, i); lineBuffer = lineBuffer.slice(i + 1);
-          if (line.trim()) onLine?.(line.trimEnd());
-        }
-        if (lineBuffer.length > 8192) { onLine?.(lineBuffer.slice(-8192)); lineBuffer = ''; }
-      };
+      const capture = sshOutputCapture(onLine);
+      let done = false, exitCode = null;
       const finish = (e, code) => {
         if (done) return;
         done = true;
         bounded.removeEventListener('abort', onAbort);
         try { conn?.end(); } catch {}
-        if (e) reject(e); else resolve({ code, out: out.trim(), err: err.trim() });
+        if (e) reject(e); else resolve({ code, ...capture.result() });
       };
       const onAbort = () => finish(bounded.reason);
       bounded.addEventListener('abort', onAbort, { once: true });
@@ -137,8 +127,8 @@ export const jsSshBackend = {
           conn = c;
           conn.exec(command, (execErr, stream) => {
             if (execErr) return finish(execErr);
-            stream.on('data', (d) => { out = tail(out, d); emit(d); });
-            stream.stderr.on('data', (d) => { err = tail(err, d); emit(d); });
+            stream.on('data', capture.stdout);
+            stream.stderr.on('data', capture.stderr);
             stream.on('exit', (code) => { exitCode = code; });
             // 'close' fires after streams drain — the ssh2 analog of spawn 'close'
             stream.on('close', () => finish(null, exitCode));
@@ -154,11 +144,7 @@ export const jsSshBackend = {
     }), { timeoutMs, signal });
   },
 
-  async runStrict(context) {
-    const r = await this.run(context);
-    if (r.code !== 0) throw new Error(`ssh command failed (${r.code}): ${r.err || 'no stderr'}`);
-    return r.out;
-  },
+  runStrict: sshRunStrict,
 
   /** SHA256:… host-key fingerprint from the known_hosts file, or null. */
   async fingerprint({ home, host, port }) {
