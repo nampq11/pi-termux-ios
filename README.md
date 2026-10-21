@@ -202,8 +202,8 @@ when developing the bridge on a Linux machine. Screenshots:
 `docs/screens/`.
 
 With `PI_PLATFORM=ios` the server injects `window.PI_MOBILE_IOS=1` into HTML
-pages; `menu.js` then hides Remote/CLI/Clients (they are covered by the native
-app and, for the terminal, still need a process-free SSH path).
+pages; `menu.js` then hides only the local pi CLI page — child processes are
+denied in the in-process engine. Everything else stays reachable in the web UI.
 
 ## Accounts: API keys and OAuth
 
@@ -211,8 +211,9 @@ Accounts support both API keys and provider OAuth/subscription logins. Select
 an OAuth provider under **OAuth / subscription**, then choose **sign in**. When
 a provider offers multiple methods, a dialog offers for example **Browser
 login** or **Device code login**. Browser flows open in the system browser and
-return through the app's loopback callback; device flows show the verification
-URL and code in the app. Completed credentials are stored in
+the app polls the login until it completes — returning to the app finishes the
+sign-in; device flows show the verification URL and code in the app. Completed
+credentials are stored in
 `~/.pi/agent/auth.json` and immediately become available to the model picker.
 
 ## Layout
