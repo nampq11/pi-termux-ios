@@ -10,7 +10,7 @@ struct MainTabView: View {
     @State private var selection = Tab.chat
     @State private var password = ""
 
-    enum Tab: Hashable { case chat, remote, clients, accounts }
+    enum Tab: Hashable { case chat, remote, clients, spaces, accounts }
 
     var body: some View {
         @Bindable var model = model
@@ -24,6 +24,9 @@ struct MainTabView: View {
             ClientsView()
                 .tabItem { Label("Clients", systemImage: "rectangle.connected.to.line.below") }
                 .tag(Tab.clients)
+            NavigationStack { SpacesView() }
+                .tabItem { Label("Spaces", systemImage: "square.3.layers.3d.top.filled") }
+                .tag(Tab.spaces)
             NavigationStack { AccountsView() }
                 .tabItem { Label("Accounts", systemImage: "key") }
                 .tag(Tab.accounts)
