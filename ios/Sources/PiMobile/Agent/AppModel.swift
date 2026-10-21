@@ -34,6 +34,7 @@ public final class AppModel {
     public var keyInstall = KeyInstallModel()
     public var remote = RemoteModel()
     public var spaces = SpacesModel()
+    public var spaceCtl = SpaceCtlModel()
 
     public var agentListShown = false
     public var agentAccountsShown = false
@@ -67,6 +68,7 @@ public final class AppModel {
         remote.attach(api)
         remote.attach(keyInstall)
         spaces.attach(api)
+        spaceCtl.attach(api)
         startEventStream()
         Task {
             await loadAgentAccounts()

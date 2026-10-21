@@ -79,6 +79,11 @@ struct SpacesView: View {
                 }
                 .disabled(spaces.running || dataHostId.isEmpty || dataEndpoint.isEmpty || dataSpace.isEmpty)
                 actionButton("Space und Objekte anzeigen", "objects", spaces)
+                NavigationLink {
+                    SpaceCtlView()
+                } label: {
+                    Label("Läufe, Worker und Vorgänge steuern", systemImage: "switch.2")
+                }
             }
             if !spaces.message.isEmpty || spaces.result != nil {
                 Section {
