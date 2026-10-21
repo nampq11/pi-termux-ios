@@ -41,8 +41,7 @@ public final class AppModel {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
-    public private(set) var baseURL: URL?
-    public private(set) var token: String = ""
+    public let api = BridgeAPI()
 
     @ObservationIgnored private var sseTask: Task<Void, Never>?
     @ObservationIgnored private var urlSession = URLSession(configuration: .default)
@@ -58,19 +57,7 @@ public final class AppModel {
     // MARK: - Bridge Connection & Event Stream
 
     public func connect(url: URL) {
-        let port = url.port ?? 41943
-        var comps = URLComponents()
-        comps.scheme = "http"
-        comps.host = url.host ?? "127.0.0.1"
-        comps.port = port
-        guard let base = comps.url else { return }
-
-        let queryToken = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "token" })?.value ?? ""
-
-        self.baseURL = base
-        self.token = queryToken
-
+        api.configure(url: url)
         startEventStream()
         Task {
             await loadAgentAccounts()
@@ -89,14 +76,14 @@ public final class AppModel {
 
     private func startEventStream() {
         sseTask?.cancel()
-        guard let baseURL else { return }
+        guard let baseURL = api.baseURL else { return }
 
         sseTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
                     var comps = URLComponents(url: baseURL.appendingPathComponent("api/events"), resolvingAgainstBaseURL: false)
-                    comps?.queryItems = [URLQueryItem(name: "token", value: self.token)]
+                    comps?.queryItems = [URLQueryItem(name: "token", value: self.api.token)]
                     guard let sseURL = comps?.url else { return }
 
                     var req = URLRequest(url: sseURL)
@@ -351,7 +338,7 @@ public final class AppModel {
 
         Task {
             do {
-                let res: [String: Any] = try await post("/api/prompt", body: [
+                let res: [String: Any] = try await api.post("/api/prompt", body: [
                     "message": trimmed,
                     "requestId": UUID().uuidString
                 ])
@@ -369,13 +356,13 @@ public final class AppModel {
     public func agentStop() {
         haptic()
         agent.state.busy = false
-        Task { _ = try? await post("/api/abort", body: [:]) as [String: Any] }
+        Task { _ = try? await api.post("/api/abort", body: [:]) as [String: Any] }
     }
 
     public func agentNewConversation() {
         Task {
             do {
-                let res: [String: Any] = try await post("/api/sessions/new", body: [:])
+                let res: [String: Any] = try await api.post("/api/sessions/new", body: [:])
                 if let newId = (res["activeId"] as? String).flatMap(Int.init) {
                     agent.state.conversationId = newId
                 }
@@ -389,7 +376,7 @@ public final class AppModel {
     public func agentSwitch(_ id: Int) {
         Task {
             do {
-                _ = try await post("/api/sessions/select", body: ["id": String(id)]) as [String: Any]
+                _ = try await api.post("/api/sessions/select", body: ["id": String(id)]) as [String: Any]
                 agent.state.conversationId = id
                 await loadConversations()
             } catch {
@@ -401,7 +388,7 @@ public final class AppModel {
     public func agentRename(_ id: Int, _ title: String) {
         Task {
             do {
-                _ = try await post("/api/sessions/rename", body: ["id": String(id), "name": title]) as [String: Any]
+                _ = try await api.post("/api/sessions/rename", body: ["id": String(id), "name": title]) as [String: Any]
                 await loadConversations()
             } catch {
                 Self.log.error("rename failed: \(error.localizedDescription, privacy: .public)")
@@ -412,7 +399,7 @@ public final class AppModel {
     public func agentArchive(_ id: Int, _ archived: Bool) {
         Task {
             do {
-                _ = try await post("/api/sessions/delete", body: ["id": String(id)]) as [String: Any]
+                _ = try await api.post("/api/sessions/delete", body: ["id": String(id)]) as [String: Any]
                 await loadConversations()
             } catch {
                 Self.log.error("archive/delete failed: \(error.localizedDescription, privacy: .public)")
@@ -424,7 +411,7 @@ public final class AppModel {
         UserDefaults.standard.set(["provider": option.provider, "modelId": option.model], forKey: "agent.model")
         Task {
             do {
-                _ = try await post("/api/model", body: ["provider": option.provider, "modelId": option.model]) as [String: Any]
+                _ = try await api.post("/api/model", body: ["provider": option.provider, "modelId": option.model]) as [String: Any]
                 agent.state.model = AgentModelRef(provider: option.provider, id: option.model, name: option.name)
             } catch {
                 Self.log.error("setModel failed: \(error.localizedDescription, privacy: .public)")
@@ -434,7 +421,7 @@ public final class AppModel {
 
     public func loadConversations() async {
         do {
-            let res: [String: Any] = try await get("/api/sessions")
+            let res: [String: Any] = try await api.get("/api/sessions")
             let activeId = (res["activeId"] as? String).flatMap(Int.init)
             if let list = res["sessions"] as? [[String: Any]] {
                 agent.state.conversations = list.compactMap { d in
@@ -451,7 +438,7 @@ public final class AppModel {
 
     public func loadAgentModels() async {
         do {
-            let res: [String: Any] = try await get("/api/models")
+            let res: [String: Any] = try await api.get("/api/models")
             if let list = res["models"] as? [[String: Any]] {
                 self.agentModels = list.compactMap { d in
                     guard let p = d["provider"] as? String, let m = d["modelId"] as? String else { return nil }
@@ -480,7 +467,7 @@ public final class AppModel {
 
         var savedKeys = Set<String>()
         do {
-            let res: [String: Any] = try await get("/api/providers")
+            let res: [String: Any] = try await api.get("/api/providers")
             if let list = res["providers"] as? [[String: Any]] {
                 for p in list {
                     if let id = p["provider"] as? String { savedKeys.insert(id) }
@@ -516,7 +503,7 @@ public final class AppModel {
             guard !cleanKey.isEmpty else { return }
             Task {
                 do {
-                    _ = try await self.post("/api/auth", body: ["provider": provider, "key": cleanKey]) as [String: Any]
+                    _ = try await self.api.post("/api/auth", body: ["provider": provider, "key": cleanKey]) as [String: Any]
                     await self.loadAgentAccounts()
                     await self.loadAgentModels()
                     if let first = self.agentModels.first(where: { $0.provider == provider }) ?? self.agentModels.first {
@@ -535,7 +522,7 @@ public final class AppModel {
     }
 
     public func agentLogout(_ provider: String) async {
-        _ = try? await post("/api/auth", body: ["provider": provider, "delete": true]) as [String: Any]
+        _ = try? await api.post("/api/auth", body: ["provider": provider, "delete": true]) as [String: Any]
         await loadAgentAccounts()
         await loadAgentModels()
     }
@@ -555,55 +542,7 @@ public final class AppModel {
 
     public func openLocation(_ path: String, line: Int? = nil, pane: Int? = nil, keepConsole: Bool = true) async {}
 
-    // MARK: - HTTP Helpers
-
-    private func request(path: String, method: String, body: [String: Any]? = nil) throws -> URLRequest {
-        guard let baseURL else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Bridge not ready"])
-        }
-        var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-        comps?.queryItems = [URLQueryItem(name: "token", value: token)]
-        guard let url = comps?.url else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
-        }
-
-        var req = URLRequest(url: url)
-        req.httpMethod = method
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let body {
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        }
-        return req
-    }
-
-    private func get<T>(_ path: String) async throws -> T {
-        let req = try request(path: path, method: "GET")
-        let (data, response) = try await urlSession.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 500
-            let str = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
-            throw NSError(domain: "Bridge", code: code, userInfo: [NSLocalizedDescriptionKey: str])
-        }
-        guard let result = try JSONSerialization.jsonObject(with: data) as? T else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
-        }
-        return result
-    }
-
-    private func post<T>(_ path: String, body: [String: Any]) async throws -> T {
-        let req = try request(path: path, method: "POST", body: body)
-        let (data, response) = try await urlSession.data(for: req)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 500
-            let str = String(data: data, encoding: .utf8) ?? "HTTP \(code)"
-            throw NSError(domain: "Bridge", code: code, userInfo: [NSLocalizedDescriptionKey: str])
-        }
-        guard let result = try JSONSerialization.jsonObject(with: data) as? T else {
-            throw NSError(domain: "Bridge", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
-        }
-        return result
-    }
+    // MARK: - Content Helpers
 
     private func extractText(from content: Any?) -> String {
         if let s = content as? String { return s }

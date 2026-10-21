@@ -33,7 +33,7 @@ struct BridgeScreen: View {
             case .preparing, .starting:
                 WaitingView(phase: controller.phase)
             case .ready(let url):
-                AgentView()
+                MainTabView()
                     .environment(appModel)
                     .onAppear { appModel.connect(url: url) }
                     .onChange(of: url) { _, newUrl in appModel.connect(url: newUrl) }
