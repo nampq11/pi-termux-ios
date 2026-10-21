@@ -12,6 +12,19 @@ export function createRemoteRoutes(deps) {
   const { authPath, remoteState, trustFile, trustStatus, assertTrusted } = deps;
   const prefix = process.env.PREFIX || '';
 
+  /** Probe a host, or answer the shared login-failure contract: a rejected key
+   * login (key not installed on the host) is reported as loginFailed so the
+   * pages can offer ssh-copy-id. Returns null once it has responded. */
+  async function probeOrRespond(res, ssh) {
+    try {
+      return await probeRemote({ ssh, prefix });
+    } catch (e) {
+      const msg = String(e?.message || e);
+      json(res, 200, { ok: false, loginFailed: /ssh login failed/.test(msg), error: msg });
+      return null;
+    }
+  }
+
   return async function remoteRoutes(req, res, url, p, body) {
     if (p === '/api/remote/trust-host' && req.method === 'POST') {
       const target = str(body.target);
@@ -22,13 +35,8 @@ export function createRemoteRoutes(deps) {
       return true;
     }
     if (p === '/api/remote/auth-status' && req.method === 'POST') {
-      let info;
-      try { info = await probeRemote({ ssh: str(body.target), prefix }); } catch (e) {
-        // key login rejected (key not installed on the host) vs. other failures
-        const loginFailed = /ssh login failed/.test(String(e?.message));
-        json(res, 200, { ok: false, loginFailed, error: String(e?.message || e) });
-        return true;
-      }
+      const info = await probeOrRespond(res, str(body.target));
+      if (!info) return true;
       const trust = await trustStatus(str(body.target));
       json(res, 200, { ok: true, needsAuth: info.auth !== '1' && existsSync(authPath), ...trust });
       return true;
@@ -48,12 +56,8 @@ export function createRemoteRoutes(deps) {
       const askAuth = body.copyAuth === undefined && existsSync(authPath);
       const askUpdate = body.allowUpdate === undefined;
       if (askAuth || askUpdate) {
-        let info;
-        try { info = await probeRemote({ ssh: target, prefix }); } catch (e) {
-          const msg = String(e?.message || e);
-          json(res, 200, { ok: false, loginFailed: /ssh login failed/.test(msg), error: msg });
-          return true;
-        }
+        const info = await probeOrRespond(res, target);
+        if (!info) return true;
         if (askAuth && info.auth !== '1') {
           const trust = await trustStatus(target);
           if (!trust.trusted) { json(res, 200, { ok: false, needsTrust: true, target, ...trust }); return true; }

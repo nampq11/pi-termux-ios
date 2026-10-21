@@ -1,7 +1,7 @@
 // semver.mjs — the one place that compares dotted version strings.
 // Tolerant by design: input that is not shaped like major.minor.patch never
 // compares as newer (returns false), and trailing prerelease/build parts are
-// ignored. The shell-side twin of this check (node -e in server.mjs's
+// ignored. The shell-side twin of this check (node -e in bridge/pty.mjs's
 // REMOTE_PI_SCRIPT, run on the remote host) must stay in step.
 function parts(v) {
   const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v ?? '').trim());

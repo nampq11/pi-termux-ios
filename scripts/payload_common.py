@@ -13,6 +13,8 @@ SOURCE = Path(os.environ.get('PI_SPACES_SOURCE', str(ROOT.parent / 'pi-spaces'))
 RUNTIME = ROOT / 'runtime'
 
 # Files that make up the mobile runtime payload (same set on both platforms).
+# Must be a superset of REMOTE_FILES: the phone is the provisioning source for
+# the remote daemon tar (check_import_closures / test-manifests.mjs enforce it).
 FILES = ['server.mjs', 'bridge/http.mjs', 'bridge/sse.mjs', 'bridge/pty.mjs',
          'bridge/routes/system.mjs', 'bridge/routes/sessions.mjs', 'bridge/routes/ssh.mjs',
          'bridge/routes/remote.mjs', 'bridge/routes/accounts.mjs',
@@ -61,6 +63,10 @@ def check_import_closures():
     missing = import_closure('pi-serverd.mjs') - remote_files
     if missing:
         raise SystemExit(f'pi-serverd.mjs imports files missing from REMOTE_FILES in remote-provision.mjs: {sorted(missing)}')
+    unshipped = remote_files - set(FILES)
+    if unshipped:
+        raise SystemExit(f'REMOTE_FILES missing from FILES in payload_common.py: {sorted(unshipped)}; '
+                         'the phone payload is the provisioning source for the remote daemon')
     if import_closure('env-server.mjs'):
         raise SystemExit('env-server.mjs must stay dependency-free (no relative imports)')
     # The pages import each other (api.js, menu.js, …) and ship only as part of

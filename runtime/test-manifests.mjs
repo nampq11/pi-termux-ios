@@ -37,12 +37,24 @@ function importClosure(entry) {
   return seen;
 }
 
-test('server.mjs import closure is covered by the payload manifest', () => {
+/** The phone payload manifest, parsed from the packaging script so the tests
+ * fail when the two drift apart. */
+function payloadFiles() {
   const py = readFileSync(path.join(ROOT, '..', 'scripts', 'payload_common.py'), 'utf8');
   const block = /FILES = \[([^\]]*)\]/s.exec(py)?.[1];
   assert.ok(block, 'FILES list not found in scripts/payload_common.py');
-  const files = new Set([...block.matchAll(/'([^']+)'/g)].map((m) => m[1]));
-  const missing = [...importClosure('server.mjs')].filter((f) => !files.has(f));
+  return new Set([...block.matchAll(/'([^']+)'/g)].map((m) => m[1]));
+}
+
+test('server.mjs import closure is covered by the payload manifest', () => {
+  const missing = [...importClosure('server.mjs')].filter((f) => !payloadFiles().has(f));
+  assert.deepEqual(missing, []);
+});
+
+test('the phone payload ships everything the remote daemon needs', () => {
+  // the phone is the provisioning source: remote-provision stages the daemon
+  // tar from the phone's own runtime directory
+  const missing = REMOTE_FILES.filter((f) => !payloadFiles().has(f));
   assert.deepEqual(missing, []);
 });
 

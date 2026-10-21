@@ -120,7 +120,7 @@ async function fsOp(b) { // async: readlines streams the file
         while ((nl = rest.indexOf('\n')) !== -1) {
           const text = rest.slice(0, nl);
           rest = rest.slice(nl + 1);
-          if (index >= startLine && !full()) { lines.push({ text, terminated: true }); bytes += text.length + 1; }
+          if (index >= startLine && !full()) { lines.push({ text, terminated: true }); bytes += Buffer.byteLength(text) + 1; }
           index++;
           if (full()) break;
         }
