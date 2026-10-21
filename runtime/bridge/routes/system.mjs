@@ -66,10 +66,16 @@ export function createSystemRoutes(deps) {
     if (p === '/api/pi-version' && req.method === 'GET') {
       const installed = piInstalledVersion();
       const latest = await piLatestVersion();
-      json(res, 200, { installed, latest, updateAvailable: semverNewer(installed, latest) });
+      // canUpdate: the version check always works; the npm install cannot run
+      // in the in-process iOS engine — a new app release bundles the runtime
+      json(res, 200, { installed, latest, updateAvailable: semverNewer(installed, latest), canUpdate: !ios });
       return true;
     }
     if (p === '/api/pi-update' && req.method === 'POST') {
+      if (ios) {
+        json(res, 200, { started: false, error: 'updates are unavailable in the iOS app; a new app release bundles the updated runtime' });
+        return true;
+      }
       json(res, 200, { started: startPiUpdate() });
       return true;
     }

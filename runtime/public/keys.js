@@ -148,9 +148,10 @@ async function checkVersion() {
   elInstalled.textContent = v.installed ?? '?';
   if (v.updateAvailable) {
     elArrow.classList.remove('hidden');
-    elLatest.textContent = v.latest;
+    // iOS cannot spawn npm; the updated runtime arrives with an app release
+    elLatest.textContent = v.canUpdate === false ? `${v.latest} — ships with the next app release` : v.latest;
     elLatest.classList.remove('hidden');
-    btnUpdate.classList.remove('hidden');
+    if (v.canUpdate !== false) btnUpdate.classList.remove('hidden');
     elOk.classList.add('hidden');
   } else {
     elArrow.classList.add('hidden');
