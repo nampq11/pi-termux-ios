@@ -12,7 +12,7 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all';
 import {
   AssistantEntry, configure, createRegistry, defineDoc, defineExtension, defineTool,
-  Harness, watchEvents,
+  Harness,
 } from '@earendil-works/pi-durable';
 import { CodingTools } from '@earendil-works/pi-durable/tools';
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node';
@@ -236,9 +236,6 @@ export const SessionRegistry = defineDoc({
   initial: () => ({ sessions: {}, activeId: null }),
 });
 
-// pi-spaces shared space; refreshed automatically by pi-spaces bundle and the Android pre-build task.
-export { spaces as Spaces, startService as startSpaceService } from './pi-spaces.mjs';
-
 export async function openHarness({ dbPath, models, env, extensions = [] }, ctx) {
   const registry = createRegistry();
   registry.install(CodingTools);
@@ -294,88 +291,6 @@ export function sessionStore(harness, ctx) {
         }
       });
       return entries.length;
-    },
-  };
-}
-
-// --- sequenced event buffer --------------------------------------------------------
-// One watchEvents stream per conversation feeds a ring of numbered events. Each
-// client polls with the last sequence number it has seen, so several clients can
-// read the same events and a lost response is simply fetched again. A client that
-// fell behind the ring gets `reset: true` and reloads the transcript.
-
-export function createEventHub(harness, ctx, { ringSize = 2000, idleMs = 10 * 60_000 } = {}) {
-  const hubs = new Map(); // conversationId -> hub
-
-  async function hubFor(conversationId) {
-    const key = String(conversationId);
-    let hub = hubs.get(key);
-    if (hub) { hub.lastUse = Date.now(); return hub; }
-    hub = { epoch: crypto.randomUUID(), events: [], firstSeq: 1, nextSeq: 1, waiters: new Set(), lastUse: Date.now(), stream: null };
-    hubs.set(key, hub);
-    try {
-      hub.stream = await watchEvents(harness, Number(conversationId), ctx);
-    } catch (e) { hubs.delete(key); throw e; }
-    hub.stream.start(async (events) => {
-      for (const ev of events) {
-        hub.events.push({ seq: hub.nextSeq++, ev });
-        if (hub.events.length > ringSize) { hub.events.shift(); hub.firstSeq = hub.events[0].seq; }
-      }
-      for (const w of hub.waiters) w();
-      hub.waiters.clear();
-    });
-    return hub;
-  }
-
-  // `epoch` identifies one buffer incarnation: after a daemon restart or an
-  // idle sweep the numbering starts over and the client must reload.
-  async function poll(conversationId, after, { epoch, waitMs = 25_000, signal } = {}) {
-    const hub = await hubFor(conversationId);
-    const head = () => hub.nextSeq - 1;
-    const valid = Number.isFinite(after) && after >= 0;
-    if ((epoch && epoch !== hub.epoch) || (valid && after > head())) {
-      return { epoch: hub.epoch, cursor: head(), reset: true, events: [] };
-    }
-    const since = valid ? after : head();
-    const deadline = Date.now() + waitMs;
-    while (head() <= since && Date.now() < deadline && !signal?.aborted) {
-      await new Promise((resolve) => {
-        hub.waiters.add(resolve);
-        setTimeout(resolve, Math.min(1000, Math.max(0, deadline - Date.now())));
-      });
-    }
-    hub.lastUse = Date.now();
-    const reset = since + 1 < hub.firstSeq;
-    const events = reset ? [] : hub.events.filter((e) => e.seq > since);
-    return {
-      epoch: hub.epoch,
-      cursor: head(),
-      reset,
-      // pi-durable itself sends a fresh `snapshot` event when its queue overflows.
-      events: events.map((e) => ({ ...e.ev, seq: e.seq })),
-    };
-  }
-
-  const sweep = setInterval(async () => {
-    for (const [key, hub] of hubs) {
-      if (Date.now() - hub.lastUse > idleMs && hub.waiters.size === 0) {
-        hubs.delete(key);
-        try { await hub.stream?.stop(); } catch {}
-      }
-    }
-  }, 60_000);
-  sweep.unref();
-
-  return {
-    poll,
-    async position(conversationId) {
-      const hub = await hubFor(conversationId);
-      return { epoch: hub.epoch, cursor: hub.nextSeq - 1 };
-    },
-    async close() {
-      clearInterval(sweep);
-      for (const hub of hubs.values()) { try { await hub.stream?.stop(); } catch {} }
-      hubs.clear();
     },
   };
 }
