@@ -33,12 +33,11 @@ const REMOTE_PI_SCRIPT = [
 // single-quoted for the local `sh -c`: the base64 payload has no quote characters
 const REMOTE_PI_CMD = `'${remoteBash(REMOTE_PI_SCRIPT)}'`;
 
-export function createPtyHandler({ root, workdir }) {
+export function createPtyHandler({ root, prefix, workDir }) {
   const cli = path.join(root, 'node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js');
   return function startPty(ws, url) {
     const cols = clampInt(url.searchParams.get('cols'), 10, 1000, 120);
     const rows = clampInt(url.searchParams.get('rows'), 5, 500, 30);
-    const prefix = process.env.PREFIX || '';
     const scriptBin = prefix && existsSync(`${prefix}/bin/script`) ? `${prefix}/bin/script` : 'script';
     const sshParam = url.searchParams.get('ssh');
     const sshCmd = url.searchParams.get('sshop'); // 'copyid' -> interactive ssh-copy-id
@@ -60,7 +59,7 @@ export function createPtyHandler({ root, workdir }) {
     }
     const child = spawn(scriptBin, ['-qfec', inner, '/dev/null'], {
       env: { ...process.env, TERM: 'xterm-256color', COLUMNS: String(cols), LINES: String(rows) },
-      cwd: workdir,
+      cwd: workDir,
     });
     child.stdout.on('data', (d) => { if (ws.readyState === 1) ws.send(d); });
     child.stderr.on('data', (d) => { if (ws.readyState === 1) ws.send(d); });

@@ -41,6 +41,12 @@ export function createSseHub({ harness, sessions, ctx, getActive }) {
     clients,
     write,
     attach,
+    /** Disconnect one client: mark it closed, forget it, stop its stream. */
+    async detach(client) {
+      client.closed = true;
+      clients.delete(client);
+      try { await client.stream?.stop(); } catch {}
+    },
     /** Stop every client's event stream and close its response. */
     async stopAll() {
       for (const client of clients) { try { await client.stream?.stop(); client.res.end(); } catch {} }

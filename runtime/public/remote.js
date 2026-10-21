@@ -5,8 +5,7 @@ import { API } from './constants.js';
 import { renderMenu } from './menu.js';
 import { Transcript, usageText } from './transcript.js';
 
-const token = renderMenu();
-initApi(token);
+initApi(renderMenu());
 const hostSel = document.getElementById('host-select');
 const sessSel    = document.getElementById('session-select');
 const modelSel   = document.getElementById('model-select');

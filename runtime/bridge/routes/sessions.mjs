@@ -3,10 +3,10 @@
 // usage, and the state snapshot the chat page renders.
 import { json, str } from '../http.mjs';
 import { agentOf, ensureModel, isBusy, pickModel, requestIdOf, whenBusyOf } from '../../common.mjs';
-import { deleteSession, renameSession, sessionName } from '../../session-ops.mjs';
+import { deleteSession, renameSession, sessionName, unknownSession } from '../../session-ops.mjs';
 
 export function createSessionRoutes(deps) {
-  const { ctx, harness, sessions, models, workdir, remotes } = deps;
+  const { ctx, harness, sessions, models, workDir, remotes } = deps;
 
   async function activeState() {
     const active = deps.active;
@@ -18,7 +18,7 @@ export function createSessionRoutes(deps) {
         busy: isBusy(view),
         inbox: view?.value?.docs?.['pi.inbox'] ?? null,
         usage: view?.value?.docs?.['pi.usage'] ?? null,
-        cwd: agentOf(view).cwd ?? workdir,
+        cwd: agentOf(view).cwd ?? workDir,
         sessionId: active ? String(active.id) : null,
         sessionName: meta?.name ?? 'Main',
         remotes: Object.keys(remotes),
@@ -56,7 +56,7 @@ export function createSessionRoutes(deps) {
     if (p === '/api/sessions/fork' && req.method === 'POST') {
       // fork the given (or active) session at its newest entry
       const sourceId = str(body.id || active.id);
-      if (!(await sessions.get(sourceId))) { json(res, 404, { error: 'unknown session' }); return true; }
+      if (!(await sessions.get(sourceId))) throw unknownSession(sourceId);
       const source = await harness.conversation(Number(sourceId), ctx);
       const newest = (await source.entries({}, 1, undefined, ctx)).items[0];
       if (!newest) { json(res, 400, { error: 'nothing to fork yet' }); return true; }
@@ -68,7 +68,7 @@ export function createSessionRoutes(deps) {
     }
     if (p === '/api/sessions/select' && req.method === 'POST') {
       const id = str(body.id);
-      if (!(await sessions.get(id))) { json(res, 404, { error: 'unknown session' }); return true; }
+      if (!(await sessions.get(id))) throw unknownSession(id);
       const conversation = await harness.conversation(Number(id), ctx);
       if (!conversation) { json(res, 404, { error: 'session unavailable' }); return true; }
       await deps.activate(conversation);

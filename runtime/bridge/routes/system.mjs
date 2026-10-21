@@ -13,7 +13,7 @@ const EARENDIL_PKGS = ['@earendil-works/pi-coding-agent','@earendil-works/pi-dur
   '@earendil-works/pi-ai','@earendil-works/pi-client','@earendil-works/pi-server','@earendil-works/chord'];
 
 export function createSystemRoutes(deps) {
-  const { root, homeDir, ios } = deps;
+  const { root, prefix, homeDir, ios } = deps;
 
   function piInstalledVersion() {
     try { return JSON.parse(readFileSync(path.join(root,'node_modules',PI_PKG,'package.json'),'utf8')).version; } catch { return null; }
@@ -28,7 +28,6 @@ export function createSystemRoutes(deps) {
   function startPiUpdate() {
     if (piUpdate.running) return false;
     Object.assign(piUpdate, { running: true, done: false, ok: false, version: null, error: null, log: [] });
-    const prefix = process.env.PREFIX || '';
     // Run npm via node to avoid Termux shebang incompatibility on Android.
     // Try: node <npm-cli.js>, fallback to direct npm binary.
     const nodeBin = process.execPath;

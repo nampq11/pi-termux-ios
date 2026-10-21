@@ -7,10 +7,10 @@ import { json, str } from '../http.mjs';
 import { requestIdOf, whenBusyOf } from '../../common.mjs';
 import { copyAuthTo, probeRemote, runtimeHash, stopRemoteServer } from '../../remote-provision.mjs';
 import { readJson, writeFileAtomic } from '../../fileio.mjs';
+import { sessionName } from '../../session-ops.mjs';
 
 export function createRemoteRoutes(deps) {
-  const { authPath, remoteState, trustFile, trustStatus, assertTrusted } = deps;
-  const prefix = process.env.PREFIX || '';
+  const { prefix, authFile, remoteState, trustFile, trustStatus, assertTrusted } = deps;
 
   /** Probe a host, or answer the shared login-failure contract: a rejected key
    * login (key not installed on the host) is reported as loginFailed so the
@@ -38,22 +38,22 @@ export function createRemoteRoutes(deps) {
       const info = await probeOrRespond(res, str(body.target));
       if (!info) return true;
       const trust = await trustStatus(str(body.target));
-      json(res, 200, { ok: true, needsAuth: info.auth !== '1' && existsSync(authPath), ...trust });
+      json(res, 200, { ok: true, needsAuth: info.auth !== '1' && existsSync(authFile), ...trust });
       return true;
     }
     if (p === '/api/remote/copy-auth' && req.method === 'POST') {
-      if (!existsSync(authPath)) { json(res, 400, { error: 'no auth.json on this device' }); return true; }
+      if (!existsSync(authFile)) { json(res, 400, { error: 'no auth.json on this device' }); return true; }
       await assertTrusted(str(body.target));
       const info = await probeRemote({ ssh: str(body.target), prefix });
       if (info.auth === '1') { json(res, 409, { error: 'auth.json already exists on host' }); return true; }
-      await copyAuthTo({ ssh: str(body.target), prefix, authFile: authPath });
+      await copyAuthTo({ ssh: str(body.target), prefix, authFile });
       json(res, 200, { ok: true });
       return true;
     }
     if (p === '/api/remote/connect' && req.method === 'POST') {
       const target = str(body.target);
       // Ask before anything sensitive happens on the host: copying auth.json, or restarting an outdated daemon.
-      const askAuth = body.copyAuth === undefined && existsSync(authPath);
+      const askAuth = body.copyAuth === undefined && existsSync(authFile);
       const askUpdate = body.allowUpdate === undefined;
       if (askAuth || askUpdate) {
         const info = await probeOrRespond(res, target);
@@ -101,10 +101,10 @@ export function createRemoteRoutes(deps) {
           return true;
         }
         case 'POST /api/remote/create':
-          json(res, 200, await remote.create({ name: str(body.name, 100) || undefined }));
+          json(res, 200, await remote.create({ name: sessionName(body.name) }));
           return true;
         case 'POST /api/remote/rename':
-          json(res, 200, await remote.rename(str(body.id), str(body.name, 100)));
+          json(res, 200, await remote.rename(str(body.id), sessionName(body.name)));
           return true;
         case 'POST /api/remote/delete': {
           if (str(body.id) === remoteState.sessionId) remoteState.sessionId = null;

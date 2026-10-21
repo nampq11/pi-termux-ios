@@ -11,7 +11,9 @@ export function sessionName(value) {
   return name || undefined;
 }
 
-function unknownSession(id) {
+/** The one not-found error for session routes; the bridge's catch-all maps
+ * this onto the HTTP code. */
+export function unknownSession(id) {
   const e = new Error(`unknown session: ${id}`);
   e.status = 404; // the bridge's catch-all maps this onto the HTTP code
   return e;

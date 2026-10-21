@@ -42,6 +42,7 @@ const ctx = BACKGROUND_CONTEXT;
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const HOME_DIR = process.env.HOME || ROOT;
 const WORKDIR = process.env.PI_WORKDIR || HOME_DIR;
+const PREFIX = process.env.PREFIX || '';
 const AGENT_DIR = path.join(HOME_DIR, '.pi', 'agent');
 const AUTH_PATH = path.join(AGENT_DIR, 'auth.json');
 const STATE_DIR = path.join(HOME_DIR, '.pi-mobile');
@@ -75,7 +76,7 @@ const CLIENTS_FILE = path.join(STATE_DIR, 'clients.json');
 const TRUST_FILE = path.join(STATE_DIR, 'trusted-hosts.json');
 async function trustStatus(target) {
   parseSshTarget(target);
-  const fingerprint = await sshHostFingerprint(target, process.env.PREFIX || '');
+  const fingerprint = await sshHostFingerprint(target, PREFIX);
   if (!fingerprint) throw new Error('SSH host fingerprint not available: cannot transfer credentials');
   return { fingerprint, trusted: readJson(TRUST_FILE, {})[target] === fingerprint };
 }
@@ -107,7 +108,7 @@ function envFor({ cwd } = {}) {
     if (!remote) throw new Error(`unknown remote "${m[1]}" (configure ${path.join(STATE_DIR, 'remotes.json')})`);
     return new RemoteExecutionEnv({ cwd: m[2], baseUrl: remote.url, token: remote.token });
   }
-  const prefix = process.env.PREFIX;
+  const prefix = PREFIX;
   const bash = prefix && existsSync(path.join(prefix, 'bin/bash'))
     ? path.join(prefix, 'bin/bash') : undefined;
   const shellEnv = prefix
@@ -161,7 +162,7 @@ const serveStatic = createStaticServer({ publicDir: PUBLIC, injectIosHtmlFlag: I
 // so a retried prompt is never answered twice.
 
 const remoteState = createRemoteState({
-  prefix: process.env.PREFIX || '', stateDir: STATE_DIR, authFile: AUTH_PATH, assertTrusted,
+  prefix: PREFIX, stateDir: STATE_DIR, authFile: AUTH_PATH, assertTrusted,
 });
 
 // --- API -----------------------------------------------------------------------------
@@ -169,10 +170,9 @@ const remoteState = createRemoteState({
 // Everything the route groups need. `active` is read through a getter because
 // activate() rebinds it.
 const deps = {
-  ctx, root: ROOT, homeDir: HOME_DIR, workdir: WORKDIR, stateDir: STATE_DIR, ios: IOS,
-  harness, sessions, models, credentialStore, remotes: REMOTES,
-  mobileSpaces, remoteState,
-  authPath: AUTH_PATH, deviceIdFile: DEVICE_ID_FILE, clientsFile: CLIENTS_FILE, trustFile: TRUST_FILE,
+  ctx, root: ROOT, prefix: PREFIX, homeDir: HOME_DIR, workDir: WORKDIR, ios: IOS,
+  harness, sessions, models, credentialStore, remotes: REMOTES, remoteState,
+  authFile: AUTH_PATH, deviceIdFile: DEVICE_ID_FILE, clientsFile: CLIENTS_FILE, trustFile: TRUST_FILE,
   trustStatus, assertTrusted,
   get active() { return active; },
   activate,
@@ -215,11 +215,7 @@ const server = http.createServer(async (req, res) => {
     res.write(`data: ${JSON.stringify({ type: 'bridge_connected' })}\n\n`);
     const client = { res, stream: null, closed: false };
     sseHub.clients.add(client);
-    req.on('close', async () => {
-      client.closed = true;
-      sseHub.clients.delete(client);
-      try { await client.stream?.stop(); } catch {}
-    });
+    req.on('close', () => { sseHub.detach(client); });
     try { await sseHub.attach(client); } catch (e) { sseHub.write(client, { type: 'bridge_error', error: String(e?.message || e) }); }
     return;
   }
@@ -241,7 +237,7 @@ const server = http.createServer(async (req, res) => {
 // --- interactive pi CLI over WebSocket + util-linux `script` pty -------------
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-const startPty = createPtyHandler({ root: ROOT, workdir: WORKDIR });
+const startPty = createPtyHandler({ root: ROOT, prefix: PREFIX, workDir: WORKDIR });
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname !== '/pty' || !hostAllowed(req, listenPort) || !authed(req)) { socket.destroy(); return; }
