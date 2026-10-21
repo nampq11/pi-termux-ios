@@ -35,6 +35,10 @@ public final class KeyInstallModel {
     /// (by success, failure, or the user cancelling); the remote connect loop
     /// uses it to retry the connect after an install.
     public func begin(target: String, onFinished: (@MainActor (Bool) -> Void)? = nil) {
+        // A still-running flow is superseded: report its outcome (not
+        // installed) so its waiter — e.g. the connect loop's checked
+        // continuation — resumes instead of awaiting forever.
+        if running { finish(installed: false) }
         self.target = target
         phase = .confirm
         attempts = 0
