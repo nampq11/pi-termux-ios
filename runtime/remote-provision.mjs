@@ -1,14 +1,14 @@
 // Provision the remote daemon over key-authenticated SSH. A complete release is
 // staged before stopping the old daemon; failed starts roll back to the prior release.
-import { spawn } from 'node:child_process';
-import { createGzip } from 'node:zlib';
+import { gzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachRemote, parseSshTarget } from './remote-client.mjs';
-import { sshBackend, withDeadline } from './ssh-transport.mjs';
+import { sshBackend } from './ssh-transport.mjs';
+import { buildUstar } from './ustar.mjs';
 import { semverAtLeast } from './semver.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -172,26 +172,8 @@ export async function ensureRemoteServer({ ssh, prefix = '', log = () => {}, cop
   try {
     if (outdated) {
       log(`staging pi-serverd ${want}…`);
-      // build gzip tar in-process: avoids spawning external gzip (fails in Android sandbox)
-      const tarBuf = await withDeadline((bounded) => new Promise((resolve, reject) => {
-        const chunks = [];
-        const gz = createGzip();
-        gz.on('data', (d) => chunks.push(d));
-        gz.on('end',  () => resolve(Buffer.concat(chunks)));
-        gz.on('error', reject);
-        const tarBin = prefix ? `${prefix}/bin/tar` : 'tar';
-        const t = spawn(tarBin, ['cf', '-', ...files], { cwd: ROOT });
-        const abort = () => { t.kill('SIGKILL'); gz.destroy(); reject(bounded.reason); };
-        bounded.addEventListener('abort', abort, { once: true });
-        t.stdout.pipe(gz);
-        let tarErr = '';
-        t.stderr.on('data', (d) => { tarErr += d; });
-        t.on('error', reject);
-        t.on('close', (code) => {
-          bounded.removeEventListener('abort', abort);
-          if (code !== 0) { gz.destroy(); reject(new Error(`tar failed (${code}): ${tarErr.trim()}`)); }
-        });
-      }), { signal, timeoutMs: 60_000 });
+      // build the gzip tar in-process (ustar.mjs): iOS denies spawning tar
+      const tarBuf = gzipSync(buildUstar(ROOT, files));
       staged = true;
       const uploaded = await run(`umask 077; mkdir -p "${base}" && rm -rf "${stage}" && mkdir "${stage}" && tar xzf - -C "${stage}"`, { stdin: tarBuf });
       if (uploaded.code !== 0) throw new Error(`upload failed: ${uploaded.err}`);

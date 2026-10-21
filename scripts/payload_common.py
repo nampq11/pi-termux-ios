@@ -21,6 +21,7 @@ FILES = ['server.mjs', 'bridge/http.mjs', 'bridge/sse.mjs', 'bridge/pty.mjs',
          'common.mjs', 'fileio.mjs', 'session-ops.mjs', 'semver.mjs', 'remote-env.mjs', 'env-server.mjs',
          'pi-serverd.mjs', 'serverd-tcp.mjs', 'space-keys.mjs', 'spaces-mobile.mjs',
          'remote-client.mjs', 'remote-provision.mjs', 'remote-state.mjs', 'ssh-transport.mjs',
+         'ustar.mjs',
          'ssh-js-backend.mjs', 'pi-spaces.mjs', 'package.json', 'package-lock.json', 'public',
          'node_modules']
 
