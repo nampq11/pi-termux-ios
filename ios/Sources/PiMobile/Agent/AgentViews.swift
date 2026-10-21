@@ -91,22 +91,45 @@ public struct AgentView: View {
                     }
                     .accessibilityLabel("Open workspaces drawer")
                 }
-                // Static environment badge + conversation title. Switching
-                // environments lives in the ☰ drawer, conversation actions in
-                // the ⋯ menu — one home per concern, no duplicate tap targets.
+                // Environment switcher, mirroring the Remote screen's host
+                // title: this menu's only job is switching (conversation
+                // actions stay in ⋯), and picking an already-connected host
+                // is instant — switchEnvironment keeps live sessions.
                 ToolbarItem(placement: .principal) {
-                    HStack(spacing: 6) {
-                        Text("📱 Local")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(Color.accentColor)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.12), in: Capsule())
-                        Text(state.current?.displayTitle ?? "Agent")
-                            .font(.headline)
-                            .lineLimit(1)
+                    Menu {
+                        Section("Environment") {
+                            Button {
+                                model.switchEnvironment(.local)
+                            } label: {
+                                Label("On-Device (Local)", systemImage: "checkmark")
+                            }
+                            ForEach(model.clients.hosts) { host in
+                                Button {
+                                    model.switchEnvironment(.remote(target: host.target))
+                                } label: {
+                                    Text(host.name)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("📱 Local")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            Text(state.current?.displayTitle ?? "Agent")
+                                .font(.headline)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.down")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: model.wide ? 360 : 220)
                     }
-                    .frame(maxWidth: model.wide ? 360 : 220)
+                    .tint(.primary)
+                    .accessibilityLabel("Select environment")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
