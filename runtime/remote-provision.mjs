@@ -184,7 +184,7 @@ export async function ensureRemoteServer({ ssh, prefix = '', log = () => {}, cop
         if (copied.code !== 0) throw new Error(`dependency copy failed: ${copied.err}`);
       } else {
         log('npm install (may take minutes)…');
-        const installed = await run(`cd "${stage}" && npm install --omit=dev --no-audit --no-fund --ignore-scripts --no-package-lock 2>&1`, { timeoutMs: 15 * 60_000 });
+        const installed = await run(`cd "${stage}" && npm install --omit=dev --no-audit --no-fund --ignore-scripts 2>&1`, { timeoutMs: 15 * 60_000 });
         if (installed.code !== 0) throw new Error(`npm install failed: ${installed.err || installed.out}`);
       }
       const markers = await run(`printf '%s\\n' ${shq(want)} > "${stage}/.version" && printf '%s\\n' ${shq(deps)} > "${stage}/.deps"`);

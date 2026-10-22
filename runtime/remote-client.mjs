@@ -8,9 +8,49 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { Client } from '@earendil-works/pi-client';
+import net from 'node:net';
 import { createUnixTransportFactory } from '@earendil-works/pi-client/unix';
 
 const strictJson = (args) => JSON.parse(JSON.stringify(args ?? []));
+
+function createTcpTransportFactory({ host = '127.0.0.1', port }) {
+  return (handlers) => new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host, port });
+    let connected = false, terminal = false;
+    const close = () => {
+      if (terminal) return;
+      terminal = true;
+      socket.destroy();
+      if (connected) handlers.onClose();
+      else reject(new Error('TCP transport closed before connecting'));
+    };
+    socket.once('connect', () => {
+      if (terminal) return;
+      connected = true;
+      resolve({
+        send: (chunk) => new Promise((res, rej) => {
+          if (terminal || !socket.writable) return rej(new Error('TCP transport is closed'));
+          socket.write(chunk, (err) => err ? rej(err) : res());
+        }),
+        close: () => {
+          if (!terminal) {
+            terminal = true;
+            socket.destroy();
+          }
+        },
+      });
+    });
+    socket.on('data', (chunk) => {
+      if (!terminal) handlers.onData(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+    });
+    socket.once('end', close);
+    socket.once('close', close);
+    socket.once('error', (err) => {
+      if (!connected) reject(err);
+      else handlers.onError(err);
+    });
+  });
+}
 
 /** Reject SSH options and anything requiring shell quoting. */
 export function parseSshTarget(value) {
@@ -78,9 +118,12 @@ export async function attachRemote({ ssh, prefix = '', socketDir, serverId, remo
     try {
       await withDeadline(async (bounded) => {
         try { unlinkSync(localSock); } catch {}
-        const t = remoteTcpPort
-          ? backend.openTcpTunnel({ prefix, home, host: sshHost, port: sshPort, localPath: localSock, remoteHost: '127.0.0.1', remotePort: remoteTcpPort })
-          : backend.openStreamlocalTunnel({ prefix, home, host: sshHost, port: sshPort, localPath: localSock, remotePath });
+        const useLocalTcp = Boolean(remoteTcpPort && typeof backend.openTcpTunnel === 'function');
+        const t = useLocalTcp
+          ? backend.openTcpTunnel({ prefix, home, host: sshHost, port: sshPort, remoteHost: '127.0.0.1', remotePort: remoteTcpPort })
+          : (remoteTcpPort
+            ? backend.openTcpTunnel({ prefix, home, host: sshHost, port: sshPort, localPath: localSock, remoteHost: '127.0.0.1', remotePort: remoteTcpPort })
+            : backend.openStreamlocalTunnel({ prefix, home, host: sshHost, port: sshPort, localPath: localSock, remotePath }));
         tunnel = t;
         let err = '', exited = null;
         const abortTunnel = () => t.kill();
@@ -89,15 +132,26 @@ export async function attachRemote({ ssh, prefix = '', socketDir, serverId, remo
         t.proc.on('exit', (code) => { exited = code ?? -1; if (tunnel === t) fireLost(`ssh tunnel exited ${exited}`); });
         t.proc.on('error', (e) => { exited = -1; err += e.message; });
         try {
-          while (!existsSync(localSock)) {
-            bounded.throwIfAborted();
-            if (exited !== null) throw new Error(`ssh tunnel exited ${exited}: ${err.trim()}`);
-            await sleep(100, undefined, { signal: bounded });
+          if (useLocalTcp) {
+            while (!t.localPort) {
+              bounded.throwIfAborted();
+              if (exited !== null) throw new Error(`ssh tunnel exited ${exited}: ${err.trim()}`);
+              await sleep(20, undefined, { signal: bounded });
+            }
+          } else {
+            while (!existsSync(localSock)) {
+              bounded.throwIfAborted();
+              if (exited !== null) throw new Error(`ssh tunnel exited ${exited}: ${err.trim()}`);
+              await sleep(100, undefined, { signal: bounded });
+            }
           }
           let lastError;
           for (let i = 0; i < 20; i++) {
             bounded.throwIfAborted();
-            const c = new Client({ serverId: sid, transportFactory: createUnixTransportFactory({ path: localSock }) });
+            const transportFactory = useLocalTcp
+              ? createTcpTransportFactory({ host: '127.0.0.1', port: t.localPort })
+              : createUnixTransportFactory({ path: localSock });
+            const c = new Client({ serverId: sid, transportFactory });
             const abortClient = () => { void c.dispose(); };
             bounded.addEventListener('abort', abortClient, { once: true });
             try {

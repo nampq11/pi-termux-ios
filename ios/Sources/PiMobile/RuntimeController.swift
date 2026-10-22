@@ -88,7 +88,7 @@ final class RuntimeController: ObservableObject {
     private func environment() -> [String: String] {
         [
             "HOME": root.appendingPathComponent("home").path,
-            "TMPDIR": root.appendingPathComponent("tmp").path,
+            "TMPDIR": FileManager.default.temporaryDirectory.path,
             "PI_WORKDIR": root.appendingPathComponent("work").path,
             "PI_PORT": String(Self.bridgePort),
             "PI_PLATFORM": "ios",

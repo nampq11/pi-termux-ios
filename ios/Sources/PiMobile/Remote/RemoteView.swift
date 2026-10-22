@@ -1,13 +1,12 @@
 import SwiftUI
 
-// Native port of remote.html: host picker, connect/disconnect, session and
-// model menus, the transcript (sys/user/assistant/tool items), and the
-// composer with steer/abort/compact.
+// Redesigned for PiMobile:
+// Remote agent interface: connects over SSH tunnel to remote pi-serverd instances.
+// Delivers a cohesive, fluid Apple experience matching the local Agent screen.
 
 struct RemoteView: View {
     @Environment(AppModel.self) private var model
     @State private var selectedTarget: String?
-    @State private var draft = ""
     @State private var steer = false
     @State private var renaming: RemoteSession?
     @State private var renameText = ""
@@ -18,47 +17,74 @@ struct RemoteView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(remote.items) { item in
-                            RemoteItemRow(item: item)
-                        }
-                        if remote.items.isEmpty {
-                            intro
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if !remote.connected {
+                            disconnectedHero(remote)
+                        } else if remote.items.isEmpty {
+                            connectedEmptyState(remote)
+                        } else {
+                            ForEach(remote.items) { item in
+                                RemoteItemRow(item: item)
+                            }
                         }
                         Color.clear.frame(height: 1).id("bottom")
                     }
-                    .padding()
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
                 }
+                .scrollDismissesKeyboard(.interactively)
                 .onChange(of: remote.items.count) { _, _ in
-                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    withAnimation(PiTheme.snappySpring) {
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    }
                 }
                 .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
             }
-            .safeAreaInset(edge: .bottom) { composer(remote) }
+            .safeAreaInset(edge: .bottom) {
+                if remote.connected && remote.attachedId != nil {
+                    composer(remote)
+                }
+            }
             .navigationTitle("Remote")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) { hostMenu(remote) }
-                ToolbarItemGroup(placement: .primaryAction) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button {
-                        Task {
-                            if remote.connected || remote.connecting {
-                                await remote.disconnectHost()
-                            } else if let selectedTarget {
-                                await remote.connectHost(selectedTarget)
-                            }
-                        }
+                        haptic()
+                        model.showSidebar = true
                     } label: {
-                        Text(remote.connecting ? "cancel" : remote.connected ? "disconnect" : "connect")
-                            .font(.subheadline.weight(.semibold))
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 16, weight: .semibold))
                     }
-                    .disabled(remote.connecting ? false : selectedTarget == nil)
+                    .accessibilityLabel("Open workspaces drawer")
+                }
+                ToolbarItem(placement: .principal) {
+                    hostTitleButton(remote)
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        haptic()
+                        model.showSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    .accessibilityLabel("Settings & Tools")
+
                     sessionMenu(remote)
                 }
             }
             .task {
                 await model.clients.loadAll()
-                if selectedTarget == nil { selectedTarget = model.clients.hosts.first?.target }
+                // The view is recreated on every environment switch, so
+                // @State is lost: restore from the live or in-flight session
+                // first (a connect started from the Agent menu has no
+                // connectedTarget yet), then keep following the live host.
+                if selectedTarget == nil { selectedTarget = remote.connectingTarget ?? remote.connectedTarget ?? model.clients.hosts.first?.target }
+            }
+            .onChange(of: remote.connectedTarget) { _, target in
+                if let target, selectedTarget != target { selectedTarget = target }
             }
             .alert(alertTitle,
                    isPresented: Binding(
@@ -95,52 +121,208 @@ struct RemoteView: View {
         }
     }
 
-    private var intro: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Work with a pi running on another machine over ssh.")
+    // MARK: - Hero & Empty States
+
+    private func disconnectedHero(_ remote: RemoteModel) -> some View {
+        VStack(spacing: 24) {
+            VStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color.blue.opacity(0.12))
+                        .frame(width: 64, height: 64)
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(.blue)
+                }
+                .padding(.top, 20)
+
+                Text("Remote Workspace")
+                    .font(.title3.weight(.bold))
+
+                Text("Connect to a host running pi-serverd over an encrypted SSH tunnel.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 20)
+            }
+
+            // Connection card
+            VStack(spacing: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Target Host")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        Menu {
+                            ForEach(model.clients.hosts) { host in
+                                Button {
+                                    haptic()
+                                    selectedTarget = host.target
+                                } label: {
+                                    if host.target == selectedTarget {
+                                        Label(host.name, systemImage: "checkmark")
+                                    } else {
+                                        Text(host.name)
+                                    }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(selectedTarget.map(basename) ?? "No host selected")
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Spacer()
+                    StatusPill(remote.connecting ? .running : .idle, text: remote.connecting ? "Connecting" : "Offline")
+                }
+
+                if let target = selectedTarget {
+                    Text(target)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let err = remote.connectError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(err)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+                Button {
+                    haptic()
+                    Task {
+                        if remote.connecting {
+                            await remote.disconnectHost()
+                        } else if let selectedTarget {
+                            await remote.connectHost(selectedTarget)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        if remote.connecting {
+                            ProgressView()
+                                .tint(.white)
+                                .controlSize(.small)
+                            Text("Cancel Connecting")
+                                .font(.subheadline.weight(.semibold))
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                            Text("Connect to Host")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(remote.connecting ? .red : Color.accentColor)
+                .disabled(selectedTarget == nil)
+            }
+            .padding(16)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(PiTheme.subtleBorder, lineWidth: 0.8))
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func connectedEmptyState(_ remote: RemoteModel) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 36))
+                .foregroundStyle(.green)
+                .padding(.top, 32)
+            Text("Connected to \(selectedTarget.map(basename) ?? "host")")
+                .font(.headline)
+            Text("Start messaging to run commands, edit files, or execute tools on the remote machine.")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Text("Pick a host above and tap connect. Hosts are managed under Clients.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
         }
     }
 
-    private func hostMenu(_ remote: RemoteModel) -> some View {
+    // MARK: - Navigation Bar Elements
+
+    private func hostTitleButton(_ remote: RemoteModel) -> some View {
         Menu {
-            ForEach(model.clients.hosts) { host in
+            Section("Environment") {
                 Button {
-                    // Host change resets the UI; the user connects explicitly.
-                    if remote.connected || remote.connecting {
-                        Task { await remote.disconnectHost() }
-                    }
-                    selectedTarget = host.target
+                    model.switchEnvironment(.local)
                 } label: {
-                    if host.target == selectedTarget {
-                        Label(host.name, systemImage: "checkmark")
-                    } else {
-                        Text(host.name)
+                    Label("On-Device (Local)", systemImage: "")
+                }
+                ForEach(model.clients.hosts) { host in
+                    Button {
+                        selectedTarget = host.target
+                        // switchHost owns teardown: no inline disconnect here,
+                        // it would race switchEnvironment's own disconnect.
+                        model.switchEnvironment(.remote(target: host.target))
+                    } label: {
+                        if host.target == selectedTarget {
+                            Label(host.name, systemImage: "checkmark")
+                        } else {
+                            Text(host.name)
+                        }
                     }
                 }
             }
         } label: {
-            VStack(spacing: 0) {
-                HStack(spacing: 4) {
-                    Text(selectedTarget.map(basename) ?? "Host").font(.headline).lineLimit(1)
-                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                }
-                if let attachedId = remote.attachedId {
-                    Text("session \(attachedId)").font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 4) {
+                Text(hostLabel)
+                    .font(.headline)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                if remote.connected {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
                 }
             }
-            .frame(maxWidth: 190)
+            .frame(maxWidth: 150)
         }
         .tint(.primary)
-        .accessibilityLabel("Host")
+        .accessibilityLabel("Select environment")
     }
 
+    private var hostLabel: String {
+        if let target = selectedTarget {
+            if let host = model.clients.hosts.first(where: { $0.target == target }) {
+                return "🖥️ \(host.name)"
+            }
+            let hostPart = target.split(separator: "@").last.map(String.init) ?? target
+            let cleanHost = hostPart.split(separator: ":").first.map(String.init) ?? hostPart
+            return "🖥️ \(cleanHost)"
+        }
+        return "🖥️ Remote"
+    }
     private func sessionMenu(_ remote: RemoteModel) -> some View {
         Menu {
-            Section {
+            if remote.connected || remote.connecting {
+                Section {
+                    Button(role: .destructive) {
+                        Task { await remote.disconnectHost() }
+                    } label: {
+                        Label(remote.connecting ? "Cancel Connecting" : "Disconnect", systemImage: "xmark.circle")
+                    }
+                }
+            }
+            Section("Sessions") {
                 ForEach(remote.sessions) { session in
                     Button {
                         Task { await remote.attachSession(session.id) }
@@ -152,21 +334,31 @@ struct RemoteView: View {
                         }
                     }
                 }
+                Button {
+                    Task { await remote.newSession() }
+                } label: {
+                    Label("New Session", systemImage: "square.and.pencil")
+                }
             }
-            Section {
-                Button { Task { await remote.newSession() } } label: { Label("New session", systemImage: "square.and.pencil") }
-                Button { if let id = remote.attachedId { renaming = remote.sessions.first { $0.id == id }; renameText = renaming?.name ?? "" } }
-                    label: { Label("Rename…", systemImage: "pencil") }
-                    .disabled(remote.attachedId == nil)
-                Button(role: .destructive) {
-                    if let id = remote.attachedId { Task { await remote.deleteSession(id) } }
-                } label: { Label("Delete session", systemImage: "trash") }
-                    .disabled(remote.attachedId == nil)
-                Button(role: .destructive) { stopConfirm = true } label: { Label("Stop server…", systemImage: "stop.circle") }
-                    .disabled(selectedTarget == nil || remote.connecting)
+            if remote.attachedId != nil {
+                Section("Manage Active Session") {
+                    Button {
+                        if let id = remote.attachedId {
+                            renaming = remote.sessions.first { $0.id == id }
+                            renameText = renaming?.name ?? ""
+                        }
+                    } label: {
+                        Label("Rename Session…", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        if let id = remote.attachedId { Task { await remote.deleteSession(id) } }
+                    } label: {
+                        Label("Delete Session", systemImage: "trash")
+                    }
+                }
             }
             if !remote.models.isEmpty {
-                Section {
+                Section("Remote Models") {
                     ForEach(remote.models) { option in
                         Button {
                             Task { await remote.selectModel(option) }
@@ -178,60 +370,117 @@ struct RemoteView: View {
                             }
                         }
                     }
-                } header: {
-                    Text("Model")
                 }
             }
+            Section {
+                Button(role: .destructive) {
+                    stopConfirm = true
+                } label: {
+                    Label("Stop Server Daemon…", systemImage: "stop.circle")
+                }
+                .disabled(selectedTarget == nil || remote.connecting)
+            }
         } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("Session options")
     }
 
+    // MARK: - Composer
+
     private func composer(_ remote: RemoteModel) -> some View {
-        VStack(spacing: 4) {
-            if remote.attachedId != nil {
-                HStack(spacing: 12) {
-                    Text(remote.link == "reconnecting" ? "reconnecting…" : remote.busy ? "running…" : "idle")
-                        .font(.caption2)
+        @Bindable var remote = remote // draft binding ($remote.draft)
+        return VStack(spacing: 8) {
+            // Header status row: connection link, usage, steer toggle, compact
+            HStack(spacing: 8) {
+                StatusPill(remote.link == "reconnecting" ? .warning : remote.busy ? .running : .success,
+                           text: remote.link == "reconnecting" ? "Reconnecting" : remote.busy ? "Running" : "Idle")
+
+                if !remote.usage.isEmpty {
+                    Text(remote.usage)
+                        .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
-                    if !remote.usage.isEmpty {
-                        Text(remote.usage).font(.caption2.monospaced()).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if remote.busy {
-                        Toggle(isOn: $steer) { Text("steer").font(.caption2) }
-                            .toggleStyle(.button)
-                    }
-                    Button { Task { await remote.abort() } } label: { Image(systemName: "stop.circle") }
-                        .accessibilityLabel("Abort")
-                    Button { Task { await remote.compact() } } label: { Image(systemName: "arrow.down.square") }
-                        .accessibilityLabel("Compact")
                 }
-                HStack(alignment: .bottom, spacing: 8) {
-                    TextField(remote.busy ? "Steer the request…" : "Message the remote agent…", text: $draft, axis: .vertical)
-                        .lineLimit(1...6)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .submitLabel(.send)
-                        .onSubmit { send(remote) }
-                    Button { send(remote) } label: {
-                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
+
+                Spacer()
+
+                if remote.busy {
+                    Toggle(isOn: $steer) {
+                        Text("Steer")
+                            .font(.caption2.weight(.medium))
                     }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityLabel("Send")
+                    .toggleStyle(.button)
+                    .tint(.purple)
+                }
+
+                Button {
+                    haptic()
+                    Task { await remote.compact() }
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(5)
+                        .background(Color.primary.opacity(0.06), in: Circle())
+                }
+                .accessibilityLabel("Compact context")
+            }
+            .padding(.horizontal, 4)
+
+            // Text input and Send/Stop morphing button
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField(remote.busy ? "Steer running request…" : "Message remote pi…", text: $remote.draft, axis: .vertical)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .submitLabel(.send)
+                    .onSubmit { send(remote) }
+
+                if remote.busy && remote.draft.isEmpty {
+                    Button {
+                        haptic()
+                        Task { await remote.abort() }
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 34))
+                            .foregroundStyle(.red)
+                    }
+                    .accessibilityLabel("Abort generation")
+                    .transition(.scale.combined(with: .opacity))
+                } else {
+                    Button {
+                        send(remote)
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 34))
+                            .foregroundStyle(!remote.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.accentColor : Color.secondary.opacity(0.3))
+                    }
+                    .disabled(remote.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("Send message")
+                    .transition(.scale.combined(with: .opacity))
                 }
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(PiTheme.subtleBorder, lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
     }
 
     private func send(_ remote: RemoteModel) {
-        let text = draft
-        draft = ""
+        let text = remote.draft
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        haptic()
+        remote.draft = ""
         Task { await remote.sendPrompt(text, steer: steer) }
     }
 
@@ -287,62 +536,116 @@ struct RemoteItemRow: View {
     var body: some View {
         switch item.kind {
         case .user, .pendingUser, .failedUser:
-            Text(item.text)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(bubbleColor, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .opacity(item.kind == .pendingUser ? 0.6 : 1)
-                .foregroundStyle(item.kind == .failedUser ? .red : .primary)
-                .textSelection(.enabled)
-                .padding(.leading, 40)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        case .assistant, .liveAssistant:
-            HStack(alignment: .top, spacing: 4) {
-                Text(item.text.isEmpty ? " " : item.text).textSelection(.enabled)
-                if item.kind == .liveAssistant && item.text.isEmpty { ProgressView().controlSize(.small) }
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(item.text)
+                    .font(.body)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        bubbleColor,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    )
+                    .opacity(item.kind == .pendingUser ? 0.7 : 1)
+                    .textSelection(.enabled)
             }
-            .padding(.trailing, 40)
+            .padding(.leading, 48)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+
+        case .assistant, .liveAssistant:
+            VStack(alignment: .leading, spacing: 6) {
+                if !item.text.isEmpty {
+                    Text(AgentItemView.markdown(item.text))
+                        .font(.body)
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                } else if item.kind == .liveAssistant {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Thinking…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .padding(.trailing, 24)
             .frame(maxWidth: .infinity, alignment: .leading)
+
         case .sys:
             Text(item.text)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.primary.opacity(0.04), in: Capsule())
                 .frame(maxWidth: .infinity)
                 .textSelection(.enabled)
+
         case .tool:
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 Button {
-                    withAnimation(.snappy) { expanded.toggle() }
+                    haptic()
+                    withAnimation(PiTheme.snappySpring) { expanded.toggle() }
                 } label: {
-                    HStack {
-                        Text(item.text).font(.caption.monospaced())
+                    HStack(spacing: 8) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(item.isError ? Color.red.opacity(0.15) : Color.green.opacity(0.15))
+                                .frame(width: 28, height: 28)
+                            Image(systemName: "terminal")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(item.isError ? Color.red : Color.green)
+                        }
+
+                        Text(item.text)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .foregroundStyle(item.isError ? Color.red : Color.primary)
+
                         Spacer(minLength: 4)
-                        Image(systemName: "chevron." + (expanded ? "up" : "down")).font(.caption2)
+
+                        Image(systemName: "chevron." + (expanded ? "up" : "down"))
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
                     }
-                    .foregroundStyle(item.isError ? .red : .secondary)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+
                 if expanded, let output = item.output, !output.isEmpty {
-                    ScrollView(.horizontal) {
-                        Text(output.count > 4000 ? String(output.prefix(4000)) + "\n…" : output)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .padding(8)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Button {
+                            UIPasteboard.general.string = output
+                            haptic()
+                        } label: {
+                            Label("Copy Output", systemImage: "doc.on.doc")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.borderless)
+
+                        ScrollView(.horizontal) {
+                            Text(output.count > 4000 ? String(output.prefix(4000)) + "\n…" : output)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .padding(8)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 8))
                     }
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
                 }
             }
-            .padding(8)
-            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(12)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(PiTheme.subtleBorder, lineWidth: 0.8))
         }
     }
 
     private var bubbleColor: Color {
         switch item.kind {
-        case .failedUser: Color.red.opacity(0.12)
-        case .pendingUser: Color.accentColor.opacity(0.08)
-        default: Color.accentColor.opacity(0.15)
+        case .failedUser: Color.red.opacity(0.8)
+        case .pendingUser: Color.accentColor.opacity(0.5)
+        default: Color.accentColor
         }
     }
 }

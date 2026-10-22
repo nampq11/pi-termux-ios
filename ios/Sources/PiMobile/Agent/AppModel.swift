@@ -46,6 +46,32 @@ public final class AppModel {
         UIDevice.current.userInterfaceIdiom == .pad
     }
 
+
+    public enum AppEnvironment: Hashable, Sendable {
+        case local
+        case remote(target: String)
+
+        public var isLocal: Bool {
+            if case .local = self { return true }
+            return false
+        }
+    }
+
+    public var currentEnvironment: AppEnvironment = .local
+    public var showSettings = false
+    public var showSidebar = false
+    public var agentDraft = "" // local composer text; survives env switches
+
+    public func switchEnvironment(_ env: AppEnvironment) {
+        haptic()
+        currentEnvironment = env
+        // switchHost serializes on the main actor: a live or in-flight session
+        // on this host is kept, another host is torn down first — rapid taps
+        // can no longer land the connection on a host the UI does not show.
+        if case .remote(let target) = env {
+            Task { await remote.switchHost(target) }
+        }
+    }
     public let api = BridgeAPI()
 
     @ObservationIgnored private var sseTask: Task<Void, Never>?
@@ -74,6 +100,9 @@ public final class AppModel {
             await loadAgentAccounts()
             await loadAgentModels()
             await loadConversations()
+            // The ☰ drawer switches environments from this list; without it
+            // loaded here, a fresh launch in Local cannot reach Remote at all.
+            await clients.loadAll()
             if self.agent.state.model == nil, let first = self.agentModels.first {
                 self.agentSetModel(first)
             }

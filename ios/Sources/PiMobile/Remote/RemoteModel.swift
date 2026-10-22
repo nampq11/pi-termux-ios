@@ -70,10 +70,18 @@ public final class RemoteModel {
     public var activeModel: RemoteModelOption?
     public var busy = false
     public var usage = ""
+    public var draft = "" // composer text; model-level so env switches keep it
     public var connected = false
     public var connecting = false
+    /// Host of the live connection; nil whenever `connected` is false. Lets
+    /// environment switches keep a live session instead of reconnecting.
+    public private(set) var connectedTarget: String?
+    /// Host an in-flight connect is establishing; nil whenever `connecting`
+    /// is false. Same job as connectedTarget for the handshake window.
+    public private(set) var connectingTarget: String?
     public var link = "disconnected"
     public var dialog: Dialog?
+    public var connectError: String?
 
     private weak var api: BridgeAPI?
 
@@ -351,6 +359,7 @@ public final class RemoteModel {
         attachedId = nil
         link = "disconnected"
         connected = false
+        connectedTarget = nil
         clear()
         sessions = []
         models = []
@@ -362,6 +371,7 @@ public final class RemoteModel {
     public func disconnectHost() async {
         connectGeneration += 1
         connecting = false
+        connectingTarget = nil
         cancelDialog()
         resetUi()
         guard let api else { return }
@@ -373,9 +383,21 @@ public final class RemoteModel {
         }
     }
 
+    /// Switch to `target`, keeping a live or in-flight session on it. Every
+    /// environment switch funnels through here — main-actor serialization
+    /// instead of racing fire-and-forget connects: a repeat tap on the host
+    /// being connected to is a no-op, a different host tears down first.
+    public func switchHost(_ target: String) async {
+        if (connected && connectedTarget == target) || (connecting && connectingTarget == target) { return }
+        if connected || connecting { await disconnectHost() }
+        await connectHost(target)
+    }
+
     public func connectHost(_ target: String) async {
         guard let api, !connecting else { return }
         connecting = true
+        connectingTarget = target
+        connectError = nil
         connectGeneration += 1
         let generation = connectGeneration
         resetUi()
@@ -385,6 +407,7 @@ public final class RemoteModel {
             provisionTask?.cancel()
             if generation == connectGeneration {
                 connecting = false
+                connectingTarget = nil
                 cancelDialog()
             }
         }
@@ -424,10 +447,13 @@ public final class RemoteModel {
             if generation != connectGeneration { return }
 
             if r["ok"] as? Bool != true {
-                sys("error: \(r["error"] as? String ?? "could not connect")")
+                let err = r["error"] as? String ?? "could not connect"
+                connectError = err
+                sys("error: \(err)")
                 return
             }
             connected = true
+            connectedTarget = target
             var line = "connected: \(r["serverId"] as? String ?? "")"
             if let hostKey = r["hostKey"] as? String { line += " · host key \(hostKey)" }
             sys(line)
@@ -445,7 +471,10 @@ public final class RemoteModel {
             }
             await showSessions(list.map(Self.parseSession), attachFirst: true)
         } catch {
-            if generation == connectGeneration { sys("error: \(error.localizedDescription)") }
+            if generation == connectGeneration {
+                connectError = error.localizedDescription
+                sys("error: \(error.localizedDescription)")
+            }
         }
     }
 
